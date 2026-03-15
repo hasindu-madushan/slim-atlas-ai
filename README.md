@@ -1,4 +1,4 @@
-# Puppeteer MCP Server
+# SlimAtlas
 
 A Model Context Protocol (MCP) server that provides browser automation capabilities using Puppeteer. This server enables LLMs to interact with web pages through browser automation.
 
@@ -36,7 +36,7 @@ Add to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "puppeteer": {
+    "slimatlas": {
       "command": "bun",
       "args": ["run", "src/index.ts"]
     }
@@ -76,7 +76,7 @@ bun test --watch
 ## Project Structure
 
 ```
-puppeteer-mcp/
+slimatlas/
 ├── src/
 │   ├── index.ts       # Main entry point
 │   ├── server.ts      # MCP server implementation
@@ -94,3 +94,7 @@ puppeteer-mcp/
 - Bun runtime
 - Node.js 18+
 - Chrome browser (installed via puppeteer)
+
+## License
+
+MIT
