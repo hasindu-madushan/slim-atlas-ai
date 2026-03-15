@@ -64,7 +64,6 @@ Add to your MCP client configuration:
 | `browser_type` | Type text into an element |
 | `browser_fill` | Fill an input with a value |
 | `browser_evaluate` | Evaluate JavaScript |
-| `browser_screenshot` | Take a screenshot  |
 | `browser_get_html` | Get page HTML |
 | `browser_go_back` | Navigate back |
 | `browser_go_forward` | Navigate forward |
