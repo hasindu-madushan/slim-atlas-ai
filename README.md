@@ -1,6 +1,6 @@
 # SlimAtlas AI
 
-A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation.
+A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **MacOs** and **Linux**.
 
 Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.com/lightpanda-io/browser).
 
@@ -19,7 +19,7 @@ Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.c
 # Install dependencies
 bun install
 
-# Download Lightpanda browser (required)
+# Download Lightpanda browser (not required. Will download automatically)
 # For Linux x86_64:
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && chmod a+x ./lightpanda
 
@@ -48,7 +48,7 @@ Add to your MCP client configuration:
   "mcpServers": {
     "slimatlas": {
       "command": "bun",
-      "args": ["run", "src/index.ts"]
+      "args": ["run", "path/to/mcp/src/index.ts"]
     }
   }
 }
@@ -64,7 +64,7 @@ Add to your MCP client configuration:
 | `browser_type` | Type text into an element |
 | `browser_fill` | Fill an input with a value |
 | `browser_evaluate` | Evaluate JavaScript |
-| `browser_screenshot` | Take a screenshot |
+| `browser_screenshot` | Take a screenshot  |
 | `browser_get_html` | Get page HTML |
 | `browser_go_back` | Navigate back |
 | `browser_go_forward` | Navigate forward |
