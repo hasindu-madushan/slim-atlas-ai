@@ -7,6 +7,8 @@ export interface BrowserOptions {
     width: number;
     height: number;
   };
+  lightpandaPath?: string;
+  port?: number;
 }
 
 export interface PageInfo {

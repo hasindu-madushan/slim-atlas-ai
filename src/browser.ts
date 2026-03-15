@@ -1,34 +1,45 @@
 import puppeteer, { Browser, Page, Viewport } from 'puppeteer';
+import { spawn, ChildProcess } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import type { BrowserOptions, PageInfo, SnapshotResult, NavigateOptions, ScreenshotOptions } from './types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class BrowserManager {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private pageCounter = 0;
+  private lightpandaProcess: ChildProcess | null = null;
 
   async launch(options: BrowserOptions = {}): Promise<void> {
     if (this.browser) {
       return;
     }
 
-    const launchOptions: any = {
-      headless: options.headless ?? true,
-      args: options.args ?? ['--no-sandbox', '--disable-setuid-sandbox'],
-    };
+    const lightpandaPath = options.lightpandaPath || path.join(__dirname, '..', 'lightpanda');
+    const port = options.port || 9222;
+    const wsEndpoint = `ws://127.0.0.1:${port}`;
 
-    if (options.userDataDir) {
-      launchOptions.userDataDir = options.userDataDir;
-    }
+    this.lightpandaProcess = spawn(lightpandaPath, [
+      'serve',
+      '--obey_robots',
+      '--log_level', 'warn',
+      '--host', '127.0.0.1',
+      '--port', port.toString(),
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-    if (options.viewport) {
-      launchOptions.defaultViewport = options.viewport;
-    } else {
-      launchOptions.defaultViewport = { width: 1280, height: 720 };
-    }
-
-    this.browser = await puppeteer.launch(launchOptions);
-    const pages = await this.browser.pages();
-    this.page = pages[0] || await this.browser.newPage();
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: wsEndpoint,
+      ignoreHTTPSErrors: true,
+    });
+    
+    this.browser = browser;
+    const context = await browser.createBrowserContext();
+    this.page = await context.newPage();
   }
 
   async close(): Promise<void> {
@@ -36,6 +47,11 @@ class BrowserManager {
       await this.browser.close();
       this.browser = null;
       this.page = null;
+    }
+
+    if (this.lightpandaProcess) {
+      this.lightpandaProcess.kill();
+      this.lightpandaProcess = null;
     }
   }
 
@@ -49,7 +65,8 @@ class BrowserManager {
   async navigate(options: NavigateOptions): Promise<void> {
     const page = this.getPage();
     await page.goto(options.url, {
-      waitUntil: options.waitUntil ?? 'networkidle0',
+      waitUntil: 'load',
+      timeout: 30000,
     });
   }
 

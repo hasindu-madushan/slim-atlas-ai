@@ -1,6 +1,6 @@
 # SlimAtlas
 
-A Model Context Protocol (MCP) server that provides browser automation capabilities using Puppeteer. This server enables LLMs to interact with web pages through browser automation.
+A Model Context Protocol (MCP) server that provides browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation.
 
 ## Features
 
@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server that provides browser automation capabilit
 - **Screenshots**: Capture full page or viewport screenshots
 - **History Navigation**: Go back, go forward, and reload pages
 - **HTML Extraction**: Get page HTML content
+- **Lightweight**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
 
 ## Installation
 
@@ -16,8 +17,15 @@ A Model Context Protocol (MCP) server that provides browser automation capabilit
 # Install dependencies
 bun install
 
-# Install Chrome browser for Puppeteer
-bunx puppeteer browsers install chrome
+# Download Lightpanda browser (required)
+# For Linux x86_64:
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && chmod a+x ./lightpanda
+
+# For MacOS aarch64 (Apple Silicon):
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && chmod a+x ./lightpanda
+
+# For MacOS x86_64:
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
 ```
 
 ## Usage
@@ -86,6 +94,7 @@ slimatlas/
 │   ├── server.test.ts     # Server tests
 │   ├── integration.test.ts # Integration tests
 │   └── mcp.test.ts        # MCP protocol tests
+├── lightpanda         # Lightpanda browser binary
 └── package.json
 ```
 
@@ -93,7 +102,7 @@ slimatlas/
 
 - Bun runtime
 - Node.js 18+
-- Chrome browser (installed via puppeteer)
+- Lightpanda browser (downloads automatically or manually)
 
 ## License
 

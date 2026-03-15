@@ -1,7 +1,7 @@
 {
-  "name": "puppeteer-mcp",
+  "name": "slimatlas",
   "version": "1.0.0",
-  "description": "Puppeteer MCP Server - Model Context Protocol server for browser automation using Puppeteer",
+  "description": "SlimAtlas MCP Server - Model Context Protocol server for browser automation using Lightpanda",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
@@ -21,6 +21,6 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": ["mcp", "puppeteer", "browser", "automation", "model-context-protocol"],
+  "keywords": ["mcp", "lightpanda", "browser", "automation", "model-context-protocol"],
   "license": "MIT"
 }

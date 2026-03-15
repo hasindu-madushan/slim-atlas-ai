@@ -13,7 +13,7 @@ export class PuppeteerMCPServer {
   constructor() {
     this.server = new Server(
       {
-        name: 'puppeteer-mcp',
+        name: 'slimatlas',
         version: '1.0.0',
       },
       {
