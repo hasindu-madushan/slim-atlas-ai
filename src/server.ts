@@ -376,14 +376,25 @@ export class PuppeteerMCPServer {
             };
 
           case 'browser_install':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Browser already installed via puppeteer',
-                },
-              ],
-            };
+            try {
+              await browserManager.install();
+              return {
+                content: [
+                  {
+                    text: 'Lightpanda browser installed successfully.',
+                  },
+                ],
+              };
+            } catch (error) {
+              return {
+                content: [
+                  {
+                    text: `Error installing browser: ${error instanceof Error ? error.message : String(error)}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
 
           default:
             throw new Error(`Unknown tool: ${toolName}`);

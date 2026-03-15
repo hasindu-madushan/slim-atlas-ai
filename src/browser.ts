@@ -3,9 +3,43 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { BrowserOptions, PageInfo, SnapshotResult, NavigateOptions, ScreenshotOptions } from './types.js';
+import { existsSync, chmodSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+async function installLightpanda(targetPath: string): Promise<void> {
+  const platform = process.platform;
+  const arch = process.arch;
+  
+  let url: string;
+  if (platform === 'darwin') {
+    url = arch === 'arm64' 
+      ? 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos'
+      : 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos';
+  } else if (platform === 'linux') {
+    url = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux';
+  } else {
+    throw new Error(`Unsupported platform: ${platform}`);
+  }
+
+  console.log(`Downloading Lightpanda from ${url}...`);
+  
+  const { spawn: spawnAsync } = await import('child_process');
+  const curl = spawnAsync('curl', ['-L', '-o', targetPath, url], { stdio: 'inherit' });
+  
+  await new Promise<void>((resolve, reject) => {
+    curl.on('close', (code) => {
+      if (code === 0) {
+        chmodSync(targetPath, 0o755);
+        console.log('Lightpanda installed successfully.');
+        resolve();
+      } else {
+        reject(new Error(`Failed to download Lightpanda (exit code: ${code})`));
+      }
+    });
+  });
+}
 
 class BrowserManager {
   private browser: Browser | null = null;
@@ -13,12 +47,25 @@ class BrowserManager {
   private pageCounter = 0;
   private lightpandaProcess: ChildProcess | null = null;
 
+  async install(): Promise<void> {
+    const lightpandaPath = path.join(__dirname, '..', 'lightpanda');
+    
+    if (!existsSync(lightpandaPath)) {
+      await installLightpanda(lightpandaPath);
+    }
+  }
+
   async launch(options: BrowserOptions = {}): Promise<void> {
     if (this.browser) {
       return;
     }
 
     const lightpandaPath = options.lightpandaPath || path.join(__dirname, '..', 'lightpanda');
+    
+    if (!existsSync(lightpandaPath)) {
+      await installLightpanda(lightpandaPath);
+    }
+    
     const port = options.port || 9222;
     const wsEndpoint = `ws://127.0.0.1:${port}`;
 
