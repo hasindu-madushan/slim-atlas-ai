@@ -212,9 +212,14 @@ export class PuppeteerMCPServer {
       const args = request.params.arguments as Record<string, any>;
 
       try {
-        if (!this.isInitialized) {
-          await browserManager.launch({ headless: true });
-          this.isInitialized = true;
+        const needsBrowser = toolName !== 'browser_install';
+        
+        if (needsBrowser) {
+          if (!this.isInitialized || !await browserManager.isBrowserConnected()) {
+            await browserManager.close();
+            await browserManager.launch({ headless: true });
+            this.isInitialized = true;
+          }
         }
 
         switch (toolName) {

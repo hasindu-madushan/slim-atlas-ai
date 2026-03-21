@@ -46,6 +46,7 @@ class BrowserManager {
   private page: Page | null = null;
   private pageCounter = 0;
   private lightpandaProcess: ChildProcess | null = null;
+  private context: any = null;
 
   async install(): Promise<void> {
     const lightpandaPath = path.join(__dirname, '..', 'lightpanda');
@@ -56,9 +57,11 @@ class BrowserManager {
   }
 
   async launch(options: BrowserOptions = {}): Promise<void> {
-    if (this.browser) {
+    if (this.browser && this.browser.connected) {
       return;
     }
+
+    await this.close();
 
     const lightpandaPath = options.lightpandaPath || path.join(__dirname, '..', 'lightpanda');
     
@@ -79,21 +82,38 @@ class BrowserManager {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
     const browser = await puppeteer.connect({
       browserWSEndpoint: wsEndpoint,
       ignoreHTTPSErrors: true,
     });
     
     this.browser = browser;
-    const context = await browser.createBrowserContext();
-    this.page = await context.newPage();
+    this.context = await browser.createBrowserContext();
+    this.page = await this.context.newPage();
   }
 
   async close(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
+    if (this.page) {
+      try {
+        await this.page.close();
+      } catch (e) {}
       this.page = null;
+    }
+
+    if (this.context) {
+      try {
+        await this.context.close();
+      } catch (e) {}
+      this.context = null;
+    }
+
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch (e) {}
+      this.browser = null;
     }
 
     if (this.lightpandaProcess) {
@@ -111,6 +131,11 @@ class BrowserManager {
 
   async navigate(options: NavigateOptions): Promise<void> {
     const page = this.getPage();
+    
+    if (!page || page.isClosed()) {
+      throw new Error('Browser page is not available. Please restart the browser.');
+    }
+    
     await page.goto(options.url, {
       waitUntil: 'load',
       timeout: 30000,
