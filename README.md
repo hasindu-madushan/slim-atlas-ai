@@ -1,3 +1,5 @@
+![SlimAtlas AI Logo](img/slim-atlas-logo.png)
+
 # SlimAtlas AI
 
 A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **MacOs** and **Linux**.
