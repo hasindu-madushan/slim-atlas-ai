@@ -50,37 +50,58 @@ export class PuppeteerMCPServer {
               required: ['url'],
             },
           },
-          // {
-          //   name: 'browser_snapshot',
-          //   description: 'Get accessibility snapshot of the current page',
-          //   inputSchema: {
-          //     type: 'object',
-          //     properties: {},
-          //   },
-          // },
           {
-            name: 'browser_click',
-            description: 'Click on an element',
+            name: 'browser_snapshot',
+            description: 'Get YAML snapshot of the current page DOM tree with unique IDs',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+            },
+          },
+          {
+            name: 'browser_view_node',
+            description: 'View a specific node by ID - shows full text content or image',
             inputSchema: {
               type: 'object',
               properties: {
-                selector: {
-                  type: 'string',
-                  description: 'CSS selector for the element to click',
+                nodeId: {
+                  type: 'number',
+                  description: 'The unique ID of the node to view (from snapshot)',
                 },
               },
-              required: ['selector'],
+              required: ['nodeId'],
+            },
+          },
+          {
+            name: 'browser_click',
+            description: 'Click on an element. Use nodeId (recommended) from snapshot, or CSS selector as fallback.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                nodeId: {
+                  type: 'number',
+                  description: 'Unique node ID from snapshot (recommended)',
+                },
+                selector: {
+                  type: 'string',
+                  description: 'CSS selector (use only if nodeId not available)',
+                },
+              },
             },
           },
           {
             name: 'browser_type',
-            description: 'Type text into an element',
+            description: 'Type text into an element. Use nodeId (recommended) from snapshot, or CSS selector as fallback.',
             inputSchema: {
               type: 'object',
               properties: {
+                nodeId: {
+                  type: 'number',
+                  description: 'Unique node ID from snapshot (recommended)',
+                },
                 selector: {
                   type: 'string',
-                  description: 'CSS selector for the input element',
+                  description: 'CSS selector (use only if nodeId not available)',
                 },
                 text: {
                   type: 'string',
@@ -92,7 +113,7 @@ export class PuppeteerMCPServer {
                   default: 0,
                 },
               },
-              required: ['selector', 'text'],
+              required: ['text'],
             },
           },
           {
@@ -127,34 +148,34 @@ export class PuppeteerMCPServer {
               required: ['script'],
             },
           },
-          {
-            name: 'browser_screenshot',
-            description: 'Take a screenshot of the current page',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                fullPage: {
-                  type: 'boolean',
-                  description: 'Capture full page or just viewport',
-                  default: false,
-                },
-                type: {
-                  type: 'string',
-                  enum: ['png', 'jpeg'],
-                  description: 'Image format',
-                  default: 'png',
-                },
-              },
-            },
-          },
-          {
-            name: 'browser_get_html',
-            description: 'Get the HTML content of the page',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
+          // {
+          //   name: 'browser_screenshot',
+          //   description: 'Take a screenshot of the current page',
+          //   inputSchema: {
+          //     type: 'object',
+          //     properties: {
+          //       fullPage: {
+          //         type: 'boolean',
+          //         description: 'Capture full page or just viewport',
+          //         default: false,
+          //       },
+          //       type: {
+          //         type: 'string',
+          //         enum: ['png', 'jpeg'],
+          //         description: 'Image format',
+          //         default: 'png',
+          //       },
+          //     },
+          //   },
+          // },
+          // {
+          //   name: 'browser_get_html',
+          //   description: 'Get the HTML content of the page',
+          //   inputSchema: {
+          //     type: 'object',
+          //     properties: {},
+          //   },
+          // },
           {
             name: 'browser_go_back',
             description: 'Navigate back in history',
@@ -195,14 +216,14 @@ export class PuppeteerMCPServer {
               properties: {},
             },
           },
-          {
-            name: 'browser_install',
-            description: 'Install the browser binaries',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
+          // {
+          //   name: 'browser_install',
+          //   description: 'Install the browser binaries',
+          //   inputSchema: {
+          //     type: 'object',
+          //     properties: {},
+          //   },
+          // },
         ],
       };
     });
@@ -244,29 +265,85 @@ export class PuppeteerMCPServer {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(snapshot, null, 2),
+                  text: snapshot.accessibilityTree,
+                },
+              ],
+            };
+
+          case 'browser_view_node':
+            const nodeResult = await browserManager.viewNode(args.nodeId);
+            if (nodeResult.type === 'image') {
+              return {
+                content: [
+                  {
+                    type: 'image',
+                    data: nodeResult.content,
+                    mimeType: 'image/png',
+                  },
+                ],
+              };
+            }
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: nodeResult.content,
                 },
               ],
             };
 
           case 'browser_click':
-            await browserManager.click(args.selector);
+            const clickSelector = args.nodeId !== undefined 
+              ? await browserManager.getSelectorByNodeId(args.nodeId)
+              : args.selector;
+            
+            if (!clickSelector) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: args.nodeId !== undefined 
+                      ? `Node ID ${args.nodeId} not found`
+                      : 'Selector is required',
+                  },
+                ],
+              };
+            }
+            
+            await browserManager.click(clickSelector);
             return {
               content: [
                 {
                   type: 'text',
-                  text: `Clicked element: ${args.selector}`,
+                  text: `Clicked: ${clickSelector}`,
                 },
               ],
             };
 
           case 'browser_type':
-            await browserManager.type(args.selector, args.text, { delay: args.delay });
+            const typeSelector = args.nodeId !== undefined 
+              ? await browserManager.getSelectorByNodeId(args.nodeId)
+              : args.selector;
+            
+            if (!typeSelector) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: args.nodeId !== undefined 
+                      ? `Node ID ${args.nodeId} not found`
+                      : 'Selector is required',
+                  },
+                ],
+              };
+            }
+            
+            await browserManager.type(typeSelector, args.text, { delay: args.delay });
             return {
               content: [
                 {
                   type: 'text',
-                  text: `Typed text into ${args.selector}`,
+                  text: `Typed into: ${typeSelector}`,
                 },
               ],
             };
