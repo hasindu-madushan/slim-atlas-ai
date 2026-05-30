@@ -665,3 +665,17 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
 }
 
 export const browserManager = new BrowserManager();
+
+export function isCrashError(error: any): boolean {
+  const msg = (error?.message || error || '').toLowerCase();
+  return (
+    msg.includes('target closed') ||
+    msg.includes('session closed') ||
+    msg.includes('segfault') ||
+    msg.includes('segmentation') ||
+    msg.includes('detached') ||
+    msg.includes('not connected') ||
+    msg.includes('connection closed') ||
+    msg.includes('protocol error')
+  );
+}

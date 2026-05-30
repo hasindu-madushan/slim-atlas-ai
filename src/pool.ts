@@ -1,0 +1,176 @@
+import { spawn, ChildProcess, exec } from 'child_process';
+import puppeteer from 'puppeteer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const BASE_PORT = parseInt(process.env.LIGHTPANDA_BASE_PORT || '9222', 10);
+const MAX_SIZE = parseInt(process.env.LIGHTPANDA_POOL_SIZE || '5', 10);
+
+interface LightpandaInstance {
+  id: string;
+  port: number;
+  process: ChildProcess;
+  browser: any;
+  context: any;
+  page: any;
+  ready: boolean;
+}
+
+function killPort(port: number): Promise<void> {
+  return new Promise((resolve) => {
+    exec(`lsof -i :${port} -t | xargs kill -9 2>/dev/null`, () => resolve());
+  });
+}
+
+function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec(`lsof -i :${port} -t`, (err, stdout) => {
+      resolve(!!stdout && stdout.trim().length > 0);
+    });
+  });
+}
+
+export class LightpandaPool {
+  private instances: LightpandaInstance[] = [];
+  private available: LightpandaInstance[] = [];
+  private inUse: Map<string, LightpandaInstance> = new Map();
+  private waitQueue: Array<(instance: LightpandaInstance) => void> = [];
+  private nextPort = BASE_PORT;
+
+  async acquire(sessionId: string): Promise<LightpandaInstance> {
+    if (this.inUse.has(sessionId)) {
+      return this.inUse.get(sessionId)!;
+    }
+
+    if (this.available.length > 0) {
+      const instance = this.available.pop()!;
+      this.inUse.set(sessionId, instance);
+      return instance;
+    }
+
+    if (this.instances.length < MAX_SIZE) {
+      const instance = await this.spawnInstance();
+      this.instances.push(instance);
+      this.inUse.set(sessionId, instance);
+      return instance;
+    }
+
+    return new Promise((resolve) => {
+      this.waitQueue.push((instance) => {
+        this.inUse.set(sessionId, instance);
+        resolve(instance);
+      });
+    });
+  }
+
+  release(sessionId: string): void {
+    const instance = this.inUse.get(sessionId);
+    if (!instance) return;
+    this.inUse.delete(sessionId);
+
+    if (this.waitQueue.length > 0) {
+      const next = this.waitQueue.shift()!;
+      next(instance);
+    } else {
+      this.recycleInstance(instance);
+    }
+  }
+
+  private async recycleInstance(instance: LightpandaInstance): Promise<void> {
+    try { await instance.page?.close(); } catch (e) {}
+    try { await instance.context?.close(); } catch (e) {}
+    try { instance.browser?.disconnect(); } catch (e) {}
+    try { instance.process.kill('SIGKILL'); } catch (e) {}
+    await killPort(instance.port);
+
+    try {
+      const newInstance = await this.spawnInstanceOnPort(instance.port);
+      const idx = this.instances.findIndex(i => i.id === instance.id);
+      if (idx >= 0) this.instances[idx] = newInstance;
+      this.available.push(newInstance);
+    } catch (e) {
+      console.error(`[pool] Failed to recycle ${instance.id}:`, (e as Error).message);
+      const idx = this.instances.findIndex(i => i.id === instance.id);
+      if (idx >= 0) this.instances.splice(idx, 1);
+    }
+  }
+
+  private async spawnInstance(): Promise<LightpandaInstance> {
+    const port = this.nextPort++;
+    return this.spawnInstanceOnPort(port);
+  }
+
+  private async spawnInstanceOnPort(port: number): Promise<LightpandaInstance> {
+    const id = `lp-${port}`;
+    const lightpandaPath = path.join(__dirname, '..', 'lightpanda');
+
+    if (!existsSync(lightpandaPath)) {
+      throw new Error(`Lightpanda binary not found at ${lightpandaPath}. Run browser_install first.`);
+    }
+
+    await killPort(port);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const proc = spawn(lightpandaPath, [
+      'serve', '--obey_robots', '--log_level', 'warn',
+      '--host', '127.0.0.1', '--port', port.toString(),
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    proc.on('error', (err) => console.error(`[pool] ${id} error:`, err.message));
+    proc.on('exit', (code) => {
+      console.error(`[pool] ${id} exited: ${code}`);
+      const inst = this.instances.find(i => i.id === id);
+      if (inst) inst.ready = false;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const wsEndpoint = `ws://127.0.0.1:${port}`;
+    let browser: any = null;
+    for (let i = 0; i < 15; i++) {
+      try {
+        browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
+        break;
+      } catch (e) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+
+    if (!browser) {
+      proc.kill('SIGKILL');
+      throw new Error(`Failed to connect to lightpanda on port ${port}`);
+    }
+
+    const context = await browser.createBrowserContext();
+    const page = await context.newPage();
+
+    return { id, port, process: proc, browser, context, page, ready: true };
+  }
+
+  async shutdown(): Promise<void> {
+    for (const instance of this.instances) {
+      try { await instance.page?.close(); } catch (e) {}
+      try { await instance.context?.close(); } catch (e) {}
+      try { instance.browser?.disconnect(); } catch (e) {}
+      try { instance.process.kill('SIGKILL'); } catch (e) {}
+      await killPort(instance.port);
+    }
+    this.instances = [];
+    this.available = [];
+    this.inUse.clear();
+    this.waitQueue = [];
+  }
+
+  getStats() {
+    return {
+      total: this.instances.length,
+      available: this.available.length,
+      inUse: this.inUse.size,
+      maxSize: MAX_SIZE,
+    };
+  }
+}
