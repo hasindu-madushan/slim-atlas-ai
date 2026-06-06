@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {

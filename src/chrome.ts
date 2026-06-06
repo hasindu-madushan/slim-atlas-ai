@@ -42,7 +42,7 @@ export class ChromeManager {
     if (this.browser && this.browser.connected) return;
     await this.close();
 
-    this.browser = await puppeteer.launch({ headless: 'new', args: CHROME_LAUNCH_ARGS });
+    this.browser = await puppeteer.launch({ headless: true as any, args: CHROME_LAUNCH_ARGS });
     this.ownedBrowser = true;
     this.context = await this.browser.createBrowserContext();
     this.page = await this.context.newPage();
@@ -181,7 +181,7 @@ export class ChromeManager {
       try { const buf = await page.screenshot({ fullPage: false, encoding: 'base64' }); return { type: 'image', content: buf as string }; }
       catch (e) { return { type: 'text', content: `Image: ${(result as any).src}` }; }
     }
-    return { type: 'text', content: result.text };
+    return { type: 'text', content: result.text || '' };
   }
 
   async getSelectorByNodeId(nodeId: number): Promise<string | null> {
@@ -244,7 +244,7 @@ export class ChromeManager {
         else if (key === 'text' || key === 'image_alt') lines.push(`${spaces}${key}: "${String(value).replace(/"/g, '\\"')}"`);
         else if (key === 'children') {
           lines.push(`${spaces}${key}:`);
-          for (const child of value) {
+          for (const child of (value as any[])) {
             if (typeof child === 'object' && child !== null) {
               for (const [childId, childObj] of Object.entries(child)) {
                 lines.push(`${spaces}  ${childId}:`);

@@ -20,7 +20,7 @@ export class ChromePool {
     if (this.browser && this.browser.connected) return this.browser;
 
     this.browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true as any,
       args: [
         '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
         '--no-first-run', '--disable-extensions', '--disable-background-networking',

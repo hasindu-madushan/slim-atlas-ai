@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, jest, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { browserManager } from '../src/browser.js';
 import { PuppeteerMCPServer } from '../src/server.js';
 

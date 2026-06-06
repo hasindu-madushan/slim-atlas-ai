@@ -50,39 +50,6 @@ export class SessionManager {
     if (state.browserType === 'chrome') {
       await this.attachChrome(sessionId, state);
     } else {
-      await this.attachLightpanda(sessionId, state);
-    }
-
-    this.sessions.set(sessionId, state);
-    return state.manager!;
-  }
-
-  private async attachLightpanda(sessionId: string, state: SessionState): Promise<void> {
-    const lpInstance = await this.lpPool.acquire(sessionId);
-    state.lpInstanceId = lpInstance.id;
-    state.manager = new ChromeManager({ browser: lpInstance.browser, context: lpInstance.context, page: lpInstance.page });
-  }
-
-  async acquire(sessionId: string, preferChrome = false): Promise<ChromeManager> {
-    let state = this.sessions.get(sessionId);
-
-    if (state && state.manager) {
-      if ((preferChrome || state.preferChrome) && state.browserType === 'lightpanda' && CHROME_ENABLED) {
-        await this.switchToChrome(sessionId, state);
-      }
-      return state.manager;
-    }
-
-    state = {
-      browserType: preferChrome && CHROME_ENABLED ? 'chrome' : 'lightpanda',
-      preferChrome: preferChrome && CHROME_ENABLED,
-      queue: Promise.resolve(),
-      manager: null,
-    };
-
-    if (state.browserType === 'chrome') {
-      await this.attachChrome(sessionId, state);
-    } else {
       try {
         await this.attachLightpanda(sessionId, state);
       } catch (e: any) {
@@ -103,6 +70,12 @@ export class SessionManager {
 
     this.sessions.set(sessionId, state);
     return state.manager!;
+  }
+
+  private async attachLightpanda(sessionId: string, state: SessionState): Promise<void> {
+    const lpInstance = await this.lpPool.acquire(sessionId);
+    state.lpInstanceId = lpInstance.id;
+    state.manager = new ChromeManager({ browser: lpInstance.browser, context: lpInstance.context, page: lpInstance.page });
   }
 
   private async attachChrome(sessionId: string, state: SessionState): Promise<void> {

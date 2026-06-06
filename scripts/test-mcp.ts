@@ -1,7 +1,7 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { spawn } from 'child_process';
 
-const server = spawn('bun', ['run', 'src/index.ts'], {
+const server = spawn('npx', ['tsx', 'src/index.ts'], {
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 
