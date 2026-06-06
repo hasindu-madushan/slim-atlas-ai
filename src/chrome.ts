@@ -69,7 +69,7 @@ export class ChromeManager {
 
   async navigate(options: NavigateOptions): Promise<void> {
     const page = this.getPage();
-    await page.goto(options.url, { waitUntil: options.waitUntil || 'load', timeout: 30000 });
+    await page.goto(options.url, { waitUntil: options.waitUntil || 'load', timeout: 300000 });
   }
 
   async getPageInfo(): Promise<PageInfo> {

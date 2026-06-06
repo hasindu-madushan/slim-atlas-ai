@@ -146,7 +146,7 @@ class BrowserManager {
     
     await page.goto(options.url, {
       waitUntil: 'load',
-      timeout: 30000,
+      timeout: 300000,
     });
   }
 
@@ -656,7 +656,7 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
 
   async waitForNavigation(options: { timeout?: number } = {}): Promise<void> {
     const page = this.getPage();
-    await page.waitForNavigation({ timeout: options.timeout ?? 30000 });
+    await page.waitForNavigation({ timeout: options.timeout ?? 300000 });
   }
 
   async isBrowserConnected(): Promise<boolean> {
