@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
 import { browserManager } from '../src/browser.js';
 
@@ -9,7 +9,7 @@ describe('MCP Integration Tests', () => {
   });
 
   beforeAll(async () => {
-    serverProcess = spawn('bun', ['run', 'src/index.ts'], {
+    serverProcess = spawn('npx', ['tsx', 'src/index.ts'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });
@@ -24,20 +24,18 @@ describe('MCP Integration Tests', () => {
     await browserManager.close();
   });
 
-  it('should start without errors', (done) => {
+  it('should start without errors', async () => {
     let output = '';
     
     serverProcess.stderr?.on('data', (data: Buffer) => {
       output += data.toString();
     });
 
-    setTimeout(() => {
-      if (output.includes('Error') || output.includes('error')) {
-        done(new Error(`Server error: ${output}`));
-      } else {
-        done();
-      }
-    }, 2000);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    if (output.includes('Error') || output.includes('error')) {
+      throw new Error(`Server error: ${output}`);
+    }
   });
 });
 

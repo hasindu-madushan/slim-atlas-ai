@@ -235,7 +235,7 @@ class BrowserManager {
           lines.push(`${spaces}${key}: "${escaped}"`);
         } else if (key === 'children') {
           lines.push(`${spaces}${key}:`);
-          for (const child of value) {
+          for (const child of (value as any[])) {
             if (typeof child === 'object' && child !== null) {
               for (const [childId, childObj] of Object.entries(child)) {
                 lines.push(`${spaces}  ${childId}:`);
@@ -378,7 +378,7 @@ class BrowserManager {
       traverse(document.body, { counter: 0 }, new Map());
       
       const allElements = document.querySelectorAll('*');
-      const idObj = { counter: 0 };
+      const idObj = { value: 0 };
       const selectorMap = new Map<number, string>();
       
       function assignIds(element: Element, counterObj: { value: number }): number {
@@ -521,7 +521,7 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
       }
     }
 
-    return { type: 'text', content: result.text };
+    return { type: 'text', content: result.text || '' };
   }
 
   async getSelectorByNodeId(nodeId: number): Promise<string | null> {

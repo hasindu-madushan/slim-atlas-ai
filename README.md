@@ -19,7 +19,7 @@ Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.c
 
 ```bash
 # Install dependencies
-bun install
+npm install
 
 # Download Lightpanda browser (not required. Will download automatically)
 # For Linux x86_64:
@@ -37,8 +37,8 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 ### Run the MCP Server
 
 ```bash
-# Run with bun
-bun run src/index.ts
+# Run with npm
+npm run dev
 ```
 
 ### Configuration
@@ -49,8 +49,8 @@ Add to your MCP client configuration:
 {
   "mcpServers": {
     "slimatlas": {
-      "command": "bun",
-      "args": ["run", "path/to/mcp/src/index.ts"]
+      "command": "npx",
+      "args": ["tsx", "path/to/mcp/src/index.ts"]
     }
   }
 }
@@ -78,10 +78,10 @@ Add to your MCP client configuration:
 
 ```bash
 # Run all tests
-bun test
+npm test
 
 # Run tests in watch mode
-bun test --watch
+npx vitest
 ```
 
 ## Project Structure
@@ -103,7 +103,6 @@ slimatlas/
 
 ## Requirements
 
-- Bun runtime
 - Node.js 18+
 - Lightpanda browser (downloads automatically or manually)
 
