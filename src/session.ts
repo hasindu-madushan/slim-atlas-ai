@@ -60,12 +60,6 @@ export class SessionManager {
   private async attachLightpanda(sessionId: string, state: SessionState): Promise<void> {
     const lpInstance = await this.lpPool.acquire(sessionId);
     state.lpInstanceId = lpInstance.id;
-
-    if (!lpInstance.browser.connected) {
-      this.lpPool.release(sessionId);
-      throw new Error(`Lightpanda instance ${lpInstance.id} is not connected`);
-    }
-
     state.manager = new ChromeManager({ browser: lpInstance.browser, context: lpInstance.context, page: lpInstance.page });
   }
 

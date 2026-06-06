@@ -46,10 +46,17 @@ export class LightpandaPool {
       return this.inUse.get(sessionId)!;
     }
 
-    if (this.available.length > 0) {
+    while (this.available.length > 0) {
       const instance = this.available.pop()!;
-      this.inUse.set(sessionId, instance);
-      return instance;
+      const alive = !instance.process.killed && instance.process.exitCode === null && instance.browser.connected;
+      if (alive) {
+        this.inUse.set(sessionId, instance);
+        return instance;
+      }
+      const idx = this.instances.findIndex(i => i.id === instance.id);
+      if (idx >= 0) this.instances.splice(idx, 1);
+      try { instance.browser?.disconnect(); } catch (e) {}
+      try { instance.process.kill('SIGKILL'); } catch (e) {}
     }
 
     if (this.instances.length < MAX_SIZE) {

@@ -98,17 +98,17 @@ export class PuppeteerMCPServer {
               required: ['selector', 'value'],
             },
           },
-          {
-            name: 'browser_evaluate',
-            description: 'Evaluate JavaScript on the page',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                script: { type: 'string', description: 'JavaScript code to evaluate' },
-              },
-              required: ['script'],
-            },
-          },
+          // {
+          //   name: 'browser_evaluate',
+          //   description: 'Evaluate JavaScript on the page',
+          //   inputSchema: {
+          //     type: 'object',
+          //     properties: {
+          //       script: { type: 'string', description: 'JavaScript code to evaluate' },
+          //     },
+          //     required: ['script'],
+          //   },
+          // },
           {
             name: 'browser_go_back',
             description: 'Navigate back in history',
