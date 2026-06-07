@@ -1,13 +1,26 @@
-node_modules/
-dist/
-build/
+/target
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Logs
 *.log
-npm-debug.log*
+
+# Environment
 .env
 .env.local
-.DS_Store
+
+# Archive (predecessor project, kept for reference only)
+archive/
+
+# Build artifacts
+build/
+dist/
 *.tgz
+
+# Coverage
 coverage/
-.nyc_output/
-.cache/
-lightpanda

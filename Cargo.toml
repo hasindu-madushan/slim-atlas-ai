@@ -1,0 +1,80 @@
+[package]
+name = "slim-atlas"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight MCP browser server for AI agents"
+license = "MIT"
+
+[[bin]]
+name = "slim-atlas"
+path = "src/main.rs"
+
+[lib]
+name = "slim_atlas"
+path = "src/lib.rs"
+
+[dependencies]
+# MCP server
+rmcp = { version = "1.7", features = [
+    "server",
+    "macros",
+    "transport-io",
+    "schemars",
+] }
+schemars = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.13", features = [
+    "cookies",
+    "rustls",
+    "json",
+    "gzip",
+    "brotli",
+    "deflate",
+] }
+
+# HTML parsing
+html5ever = "0.27"
+scraper = "0.20"
+
+# URL handling
+url = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config
+toml = "0.8"
+config = { version = "0.14", default-features = false, features = ["toml"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Utilities
+dashmap = "6"
+uuid = { version = "1", features = ["v4", "serde"] }
+http = "1"
+urlencoding = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Process / system metrics (RSS, child PIDs)
+sysinfo = "0.39"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+pretty_assertions = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

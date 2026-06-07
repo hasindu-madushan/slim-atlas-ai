@@ -1,111 +1,135 @@
-![SlimAtlas AI Logo](img/slim-atlas-logo.png)
+# slim-atlas
 
-# SlimAtlas AI
+A Model Context Protocol (MCP) server that provides lightweight browser
+automation capabilities for AI agents.
 
-A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **MacOs** and **Linux**.
+Built in Rust with a two-tier rendering architecture:
 
-Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.com/lightpanda-io/browser).
+1. **Tier 1** — plain HTTP + HTML parse (cheap, handles SSR pages)
+2. **Tier 2** — Deno subprocess with full Web API coverage (handles SPAs and
+   interactive tools)
 
-## Features
+A legacy TypeScript implementation built on Puppeteer + Lightpanda is kept at
+[`archive/slim-atlas/`](archive/slim-atlas/README.md) for reference.
 
-- **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
-- **Page Snapshots**: Get accessibility tree snapshots of pages
-- **Screenshots**: Capture full page or viewport screenshots
-- **History Navigation**: Go back, go forward, and reload pages
-- **HTML Extraction**: Get page HTML content
-- **Lightweight**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
+## Status
 
-## Installation
+**Phase 1 of 4** (in progress). Implements the read-only Tier 1 (HTTP) path
+and the MCP stdio server with 5 tools:
+
+- `navigate` — fetch a URL, return an acknowledgement (`session_id`, `title`,
+  `url`, `elapsed_ms`); content is fetched via `get_text` / `get_html`
+- `get_text` — clean text of the current page (optionally scoped by selector)
+- `get_html` — raw HTML, full or scoped
+- `query` — run a CSS selector and return matching elements
+- `click` — Phase 1 (T1-only) handles `<a href>` links; the T2 (Deno) fast
+  path for buttons, divs, forms, and JS-driven click targets is planned for
+  Phase 3
+
+All tool results are returned as a single `content[0].text` JSON string (no
+`structuredContent` field — keeps the wire payload minimal and avoids the
+duplication that `rmcp`'s `Json<T>` wrapper would otherwise emit).
+
+Session IDs are short — 4 characters from a Crockford base32 alphabet
+(`0-9a-z` minus `i/l/o/u`). 32^4 = 1,048,576 unique IDs, well within the
+safe zone for the default `max_sessions = 50` (collision probability ~0.005%
+per `create()`). Agents can pass them through every tool call without
+meaningful token overhead.
+
+Phase 2 adds the router/classifier (T1 → T2 escalation). Phase 3 brings up the
+Deno Tier 2 (SPAs, interactive tools, screenshots) and is the v1 gate. Phase 4
+is polish + distribution. See [`DESIGN.md`](DESIGN.md) for the full plan.
+
+## Requirements
+
+- Rust 1.75+ (stable)
+- macOS (aarch64 or x86_64) or Linux x86_64
+
+## Build
 
 ```bash
-# Install dependencies
-bun install
-
-# Download Lightpanda browser (not required. Will download automatically)
-# For Linux x86_64:
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && chmod a+x ./lightpanda
-
-# For MacOS aarch64 (Apple Silicon):
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && chmod a+x ./lightpanda
-
-# For MacOS x86_64:
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
+cargo build              # debug
+cargo build --release    # release
 ```
 
-## Usage
-
-### Run the MCP Server
+## Run
 
 ```bash
-# Run with bun
-bun run src/index.ts
+cargo run
 ```
 
-### Configuration
-
-Add to your MCP client configuration:
+The server speaks MCP over stdio. Configure it as an MCP server in your client
+(Claude Desktop, etc.):
 
 ```json
 {
   "mcpServers": {
-    "slimatlas": {
-      "command": "bun",
-      "args": ["run", "path/to/mcp/src/index.ts"]
+    "slim-atlas": {
+      "command": "cargo",
+      "args": ["run", "--manifest-path", "/path/to/slim-atlas/Cargo.toml"]
     }
   }
 }
 ```
 
-## Available Tools
+For a release binary:
 
-| Tool | Description |
-|------|-------------|
-| `browser_navigate` | Navigate to a URL |
-| `browser_snapshot` | Get accessibility snapshot |
-| `browser_click` | Click an element |
-| `browser_type` | Type text into an element |
-| `browser_fill` | Fill an input with a value |
-| `browser_evaluate` | Evaluate JavaScript |
-| `browser_get_html` | Get page HTML |
-| `browser_go_back` | Navigate back |
-| `browser_go_forward` | Navigate forward |
-| `browser_reload` | Reload the page |
-| `browser_get_page_info` | Get page info |
-| `browser_close` | Close the browser |
-| `browser_install` | Install browser |
+```json
+{
+  "mcpServers": {
+    "slim-atlas": {
+      "command": "/path/to/target/release/slim-atlas"
+    }
+  }
+}
+```
 
-## Running Tests
+## Test client
+
+`test_client.py` is an interactive CLI for manual testing and one-shot
+invocations. It auto-spawns the release binary (or `target/debug/slim-atlas`
+if release isn't built).
 
 ```bash
-# Run all tests
-bun test
+# Interactive REPL
+python3 test_client.py
 
-# Run tests in watch mode
-bun test --watch
+# One-shot
+python3 test_client.py navigate https://example.com/
+python3 test_client.py get_text <session_id>
+python3 test_client.py query <session_id> "h1"
 ```
 
-## Project Structure
+The default output mode is `full` (the exact JSON-RPC response). Pass
+`--mode text` to show only `content[0].text` (the tool's typed output,
+pretty-printed).
 
+## Configuration
+
+Optional `config.toml` at the working directory. All keys have defaults; the
+file is not required for basic operation. See
+[`DESIGN.md` §9](DESIGN.md#9-configuration) for the full schema.
+
+Environment overrides:
+
+- `MCP_TRANSPORT` — `stdio` (default) or `sse`
+- `MCP_MAX_TIER` — caps which tiers are used
+- `MCP_LOG_LEVEL` — `debug` | `info` | `warn` | `error`
+
+## Testing
+
+```bash
+cargo test               # unit + wiremock integration
+cargo clippy -- -D warnings
+cargo fmt --check
 ```
-slimatlas/
-├── src/
-│   ├── index.ts       # Main entry point
-│   ├── server.ts      # MCP server implementation
-│   ├── browser.ts     # Browser manager
-│   └── types.ts       # Type definitions
-├── test/
-│   ├── server.test.ts     # Server tests
-│   ├── integration.test.ts # Integration tests
-│   └── mcp.test.ts        # MCP protocol tests
-├── lightpanda         # Lightpanda browser binary
-└── package.json
+
+Network-gated tests (real `example.com`, `nextjs.org`) are marked
+`#[ignore]`. Run with:
+
+```bash
+cargo test -- --ignored
 ```
-
-## Requirements
-
-- Bun runtime
-- Node.js 18+
-- Lightpanda browser (downloads automatically or manually)
 
 ## License
 

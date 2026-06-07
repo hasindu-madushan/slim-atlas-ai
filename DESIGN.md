@@ -1,6 +1,6 @@
 # Headless Browser MCP Server — Design Document
 
-**Project:** `browser-mcp` (successor to `slim-atlas`)  
+**Project:** `slim-atlas`  
 **Stack:** Rust (core) + Deno (JS tier)  
 **Target:** Lightweight headless browser for AI agents via MCP protocol  
 **Platforms:** Linux x86_64, macOS (aarch64 + x86_64)  
@@ -14,6 +14,7 @@
 |---------|------------|-------|
 | v1      | 2026-06-06 | Initial draft with 5 tiers (T2 API detection), Lightpanda-compatible scope |
 | v2      | 2026-06-06 | Removed Lightpanda entirely; dropped Tier 2 (API detection) — too fragile; renumbered to 4 tiers; gated Tier 2 (QuickJS) on feature flag for fallback to Tier 3; v1 scope is read + write; targets Linux + macOS |
+| v3      | 2026-06-06 | Rebranded: this is `slim-atlas`, not a successor. Dropped Tier 2 (QuickJS + DOM shim) and Tier 4 (Remote fallback). Renumbered: original Tier 3 (Deno subprocess) is now Tier 2. Two tiers total: HTTP → Deno. |
 
 ---
 
@@ -24,19 +25,17 @@
 3. [Project Structure](#3-project-structure)
 4. [MCP Interface](#4-mcp-interface)
 5. [Tier 1 — Plain HTTP](#5-tier-1--plain-http)
-6. [Tier 2 — QuickJS + DOM Shim](#6-tier-2--quickjs--dom-shim)
-7. [Tier 3 — Deno Subprocess](#7-tier-3--deno-subprocess)
-8. [Tier 4 — Remote Fallback](#8-tier-4--remote-fallback)
-9. [Session & Cookie Management](#9-session--cookie-management)
-10. [Data Flow & State](#10-data-flow--state)
-11. [Configuration](#11-configuration)
-12. [Error Handling Strategy](#12-error-handling-strategy)
-13. [Resource Budgets](#13-resource-budgets)
-14. [Cargo.toml](#14-cargotoml)
-15. [Implementation Phases](#15-implementation-phases)
-16. [Testing Strategy](#16-testing-strategy)
-17. [Open Questions](#17-open-questions)
-18. [Security](#18-security)
+6. [Tier 2 — Deno Subprocess](#6-tier-2--deno-subprocess)
+7. [Session & Cookie Management](#7-session--cookie-management)
+8. [Data Flow & State](#8-data-flow--state)
+9. [Configuration](#9-configuration)
+10. [Error Handling Strategy](#10-error-handling-strategy)
+11. [Resource Budgets](#11-resource-budgets)
+12. [Cargo.toml](#12-cargotoml)
+13. [Implementation Phases](#13-implementation-phases)
+14. [Testing Strategy](#14-testing-strategy)
+15. [Open Questions](#15-open-questions)
+16. [Security](#16-security)
 
 ---
 
@@ -59,25 +58,17 @@
 │  │  classifies each request → dispatches to right tier  │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                             │
-│  ┌─────────┐  ┌──────────┐  ┌────────────┐  ┌────────────┐ │
-│  │ Tier 1  │  │ Tier 2   │  │  Tier 3    │  │  Tier 4    │ │
-│  │  HTTP   │  │ QuickJS  │  │   Deno     │  │  Remote    │ │
-│  │ reqwest │  │ +DOM shim│  │ subprocess │  │  fallback  │ │
-│  └─────────┘  └──────────┘  └────────────┘  └────────────┘ │
+│  ┌─────────────┐  ┌────────────────┐                       │
+│  │   Tier 1    │  │    Tier 2      │                       │
+│  │    HTTP     │  │     Deno       │                       │
+│  │   reqwest   │  │  subprocess    │                       │
+│  └─────────────┘  └────────────────┘                       │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │            Session Store (in-memory)                  │   │
 │  │         cookies · headers · history · DOM cache       │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
-                             │
-                     Tier 4 (remote fallback)
-                             │
-                     ┌────────▼────────┐
-                     │ Browserless.io  │
-                     │  or self-hosted │
-                     │  Chrome remote  │
-                     └─────────────────┘
 ```
 
 ---
@@ -86,7 +77,7 @@
 
 The router evaluates each request and selects the cheapest tier that can satisfy it. Tiers are tried in order; escalation happens automatically on detection of an empty DOM or JS-dependent content.
 
-Tier 2 (QuickJS) is **optional** — it can be disabled via `escalate_skip_quickjs` in config. When disabled, escalation goes directly T1 → T3 (Deno). This is a safety valve: if the QuickJS DOM shim turns out to be unmaintainable in practice, we lose Tier 2 savings but keep the rest of the design intact.
+The system has two tiers. Tier 1 handles the common case (plain HTML, SSR pages) at minimal cost. Anything that looks like a client-rendered SPA escalates to Tier 2 (Deno subprocess) for full Web API execution.
 
 ```
 Request
@@ -102,30 +93,12 @@ Request
                  │ escalate
                  ▼
 ┌──────────────────────────────────┐
-│ Tier 2: QuickJS + DOM shim       │  ~15MB RAM |  <100ms
-│  rquickjs + minimal DOM impl     │
-│  fetch routed back to reqwest    │
-│  (skippable: T1 → T3 directly)   │
-│                                  │
-│  ✅ pass if: simple JS renders   │
-│  ❌ escalate if: browser API miss │
-└────────────────┬─────────────────┘
-                 │ escalate
-                 ▼
-┌──────────────────────────────────┐
-│ Tier 3: Deno subprocess          │  ~30MB+ RAM | <300ms
+│ Tier 2: Deno subprocess          │  ~30MB+ RAM | <300ms
 │  full Web APIs + deno_dom        │
 │  sandboxed with --allow-net=host │
 │                                  │
 │  ✅ pass if: SPA renders          │
-│  ❌ escalate if: needs canvas/GPU │
-└────────────────┬─────────────────┘
-                 │ escalate
-                 ▼
-┌──────────────────────────────────┐
-│ Tier 4: Remote Browserless       │  ~0MB local|  <1000ms
-│  HTTP call to Chrome remote API  │
-│  configurable endpoint           │
+│  ✅ always: interactive tools     │
 └──────────────────────────────────┘
 ```
 
@@ -133,33 +106,30 @@ Request
 
 | Signal | Action |
 |--------|--------|
-| `<div id="root"></div>` is empty | escalate T1 → T2 (or T1 → T3 if `escalate_skip_quickjs`) |
-| `<app-root></app-root>` is empty | escalate T1 → T2 (or T1 → T3) |
+| `<div id="root"></div>` is empty | escalate T1 → T2 |
+| `<app-root></app-root>` is empty | escalate T1 → T2 |
 | `window.__NEXT_DATA__` present in HTML | stay T1 if SSR, else escalate |
-| Response body < 500 bytes with `<script>` | escalate T1 → T2 (or T1 → T3) |
-| QuickJS throws `ReferenceError: window` | escalate T2 → T3 |
-| QuickJS throws `canvas is not defined` | escalate T2 → T3 |
-| Deno returns non-zero exit | escalate T3 → T4 |
+| Response body < 500 bytes with `<script>` | escalate T1 → T2 |
+| Deno returns non-zero exit | return error to caller (no further tier) |
 
 ---
 
 ## 3. Project Structure
 
 ```
-browser-mcp/
+slim-atlas/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── config.toml                    # default config
 ├── deno/
-│   ├── render.ts                  # Deno SPA renderer (tier 3)
+│   ├── render.ts                  # Deno SPA renderer (tier 2)
 │   ├── dom_shim.ts                # minimal DOM helpers
 │   └── fetch_proxy.ts             # route fetch → Rust HTTP
-├── js/
-│   └── dom_shim.js                # QuickJS DOM shim (tier 2)
 ├── src/
 │   ├── main.rs                    # entry point, MCP bootstrap
 │   ├── config.rs                  # Config struct, load from toml/env
 │   ├── error.rs                   # BrowserError enum
+│   ├── state.rs                   # AppState (Arc<SessionStore>, Arc<Tier1Http>)
 │   ├── mcp/
 │   │   ├── mod.rs
 │   │   ├── server.rs              # MCP server setup (rmcp)
@@ -167,24 +137,21 @@ browser-mcp/
 │   ├── router/
 │   │   ├── mod.rs
 │   │   ├── classifier.rs          # heuristics to pick tier
-│   │   └── escalator.rs          # retry logic between tiers
+│   │   └── escalator.rs           # retry logic between tiers
 │   ├── session/
 │   │   ├── mod.rs
-│   │   ├── store.rs               # SessionStore (Arc<Mutex<...>>)
+│   │   ├── store.rs               # SessionStore (Arc<DashMap<...>>)
 │   │   └── cookie.rs              # cookie jar wrapper
 │   ├── tiers/
 │   │   ├── mod.rs
 │   │   ├── tier1_http.rs          # reqwest + html5ever
-│   │   ├── tier2_quickjs.rs       # rquickjs + DOM shim
-│   │   ├── tier3_deno.rs          # Deno subprocess manager
-│   │   └── tier4_remote.rs        # browserless.io client
+│   │   └── tier2_deno.rs          # Deno subprocess manager
 │   └── utils/
 │       ├── html.rs                # HTML cleaning, text extraction
 │       └── selector.rs            # CSS selector helpers
 └── tests/
     ├── tier1_tests.rs
     ├── tier2_tests.rs
-    ├── tier3_tests.rs
     └── integration_tests.rs
 ```
 
@@ -222,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
 
 | Tool | Input | Output | Notes |
 |------|-------|--------|-------|
-| `navigate` | `url: string` | `{ text, title, url, tier_used }` | fetches page, returns clean text |
+| `navigate` | `url: string` | `{ session_id, title, url, elapsed_ms }` | fetches page, returns acknowledgement only — content via `get_text` / `get_html` |
 | `get_text` | — | `string` | clean text of current page |
 | `get_html` | `selector?: string` | `string` | raw HTML, full or scoped |
 | `get_links` | `selector?: string` | `[{ text, href, absolute }]` | all anchor tags |
@@ -231,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
 | `fill` | `selector: string, value: string` | `{ success }` | fill input/textarea — tier 2+ |
 | `submit` | `selector?: string` | `{ success, new_url? }` | submit nearest form — tier 2+ |
 | `run_js` | `code: string` | `string` | execute JS, return serialized result — tier 2+ |
-| `screenshot` | `selector?: string` | `base64 PNG` | tier 3+ only (Deno) |
+| `screenshot` | `selector?: string` | `base64 PNG` | tier 2 only (Deno) |
 | `get_cookies` | — | `[{ name, value, domain }]` | session cookies |
 | `set_headers` | `headers: object` | `{ success }` | set custom request headers |
 | `reset` | — | `{ success }` | clear session, cookies, history |
@@ -243,22 +210,39 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Deserialize, JsonSchema)]
 struct NavigateInput {
     url: String,
-    /// Wait for a CSS selector to appear (tier 3+ only — Deno)
+    /// Wait for a CSS selector to appear (tier 2 only — Deno)
     wait_for: Option<String>,
-    /// Force a specific tier (1-4). Default: auto.
+    /// Force a specific tier (1-2). Default: auto.
     force_tier: Option<u8>,
 }
 
 #[derive(Serialize)]
 struct NavigateOutput {
-    text: String,
+    session_id: String,
     title: String,
     url: String,         // final URL after redirects
-    tier_used: u8,
-    escalation_path: Vec<u8>,
     elapsed_ms: u64,
 }
 ```
+
+### Wire format — single `content[0].text`, no `structuredContent`
+
+Tool handlers return `Result<String, McpError>` (not `Result<Json<Output>, _>`). The transport shim serializes the output struct with `serde_json::to_string` and returns the JSON string. The wire shape is:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      { "type": "text", "text": "{\"session_id\":\"...\",\"title\":\"...\",...}" }
+    ],
+    "isError": false
+  }
+}
+```
+
+No `structuredContent` field is emitted. Both fields are optional in the MCP spec, so this is fully compliant and keeps the payload minimal. Clients parse `content[0].text` as JSON.
 
 ---
 
@@ -361,89 +345,14 @@ pub enum FrameworkHint {
 
 ---
 
-## 6. Tier 2 — QuickJS + DOM Shim
+## 6. Tier 2 — Deno Subprocess
 
-For sites that need basic JS execution but not full browser APIs. QuickJS (~210KB binary) is embedded directly in the Rust process.
-
-### DOM Shim surface
-
-Only implement what React's render cycle actually needs:
-
-```rust
-// src/tiers/tier2_quickjs.rs
-
-const DOM_SHIM_JS: &str = include_str!("../../js/dom_shim.js");
-
-// Minimum DOM API to unblock React render:
-// - document.createElement(tag)
-// - document.createTextNode(text)
-// - element.appendChild(child)
-// - element.setAttribute(k, v)
-// - element.getAttribute(k)
-// - element.innerHTML (setter)
-// - element.textContent (getter/setter)
-// - document.querySelector(sel)
-// - document.querySelectorAll(sel)
-// - document.getElementById(id)
-// - document.body, document.head
-// - window.location.href
-// - window.addEventListener (noop)
-// - window.requestAnimationFrame (sync noop)
-// - console.log (captured)
-// - fetch() → proxied to reqwest via Rust callback
-
-pub struct QuickJsRenderer {
-    runtime: rquickjs::Runtime,
-}
-
-impl QuickJsRenderer {
-    pub fn render(&self, html: &str, scripts: Vec<String>) -> Result<String> {
-        let ctx = rquickjs::Context::full(&self.runtime)?;
-        ctx.with(|ctx| {
-            // inject DOM shim
-            ctx.eval(DOM_SHIM_JS)?;
-            // set document.documentElement from parsed HTML
-            inject_html_into_dom(&ctx, html)?;
-            // run each script
-            for script in &scripts {
-                ctx.eval(script.as_bytes())?;
-            }
-            // serialize final DOM back to HTML string
-            extract_dom_html(&ctx)
-        })
-    }
-}
-```
-
-### Failure signals to escalate to tier 3
-
-```rust
-fn should_escalate(err: &QuickJsError) -> bool {
-    let escalate_patterns = [
-        "window is not defined",
-        "canvas is not defined",
-        "WebGL",
-        "localStorage",
-        "sessionStorage",
-        "Worker is not defined",
-        "IntersectionObserver",
-        "ResizeObserver",
-        "MutationObserver",
-    ];
-    escalate_patterns.iter().any(|p| err.message.contains(p))
-}
-```
-
----
-
-## 7. Tier 3 — Deno Subprocess
-
-Full Web API coverage. Spawned as a sandboxed subprocess only when tiers 1-2 fail (or tier 1 → tier 3 directly when `escalate_skip_quickjs = true`).
+Full Web API coverage. Spawned as a sandboxed subprocess only when tier 1 fails (empty shell / SPA detected by the classifier).
 
 ### Deno subprocess design
 
 ```rust
-// src/tiers/tier3_deno.rs
+// src/tiers/tier2_deno.rs
 
 pub struct DenoRenderer {
     deno_path: PathBuf,
@@ -574,55 +483,7 @@ pub struct DenoPool {
 
 ---
 
-## 8. Tier 4 — Remote Fallback
-
-For the rare case where even Deno fails (canvas, WebGL, complex WASM sites). Optional — disabled by default; opt in via `[tiers].enabled = [1, 2, 3, 4]` in config.
-
-```rust
-// src/tiers/tier4_remote.rs
-
-pub struct RemoteBrowser {
-    endpoint: String,    // e.g. "https://chrome.browserless.io"
-    token: String,
-}
-
-impl RemoteBrowser {
-    pub async fn render(&self, url: &str) -> Result<String> {
-        let resp = reqwest::Client::new()
-            .post(format!("{}/content", self.endpoint))
-            .query(&[("token", &self.token)])
-            .json(&serde_json::json!({
-                "url": url,
-                "waitFor": 2000,
-                "gotoOptions": { "waitUntil": "networkidle2" }
-            }))
-            .send()
-            .await?;
-
-        Ok(resp.text().await?)
-    }
-
-    pub async fn screenshot(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = reqwest::Client::new()
-            .post(format!("{}/screenshot", self.endpoint))
-            .query(&[("token", &self.token)])
-            .json(&serde_json::json!({ "url": url }))
-            .send()
-            .await?;
-
-        Ok(resp.bytes().await?.to_vec())
-    }
-}
-```
-
-Configurable alternatives:
-- Self-hosted `browserless/chrome` Docker container
-- `rebrowser` (open source alternative)
-- Any Chrome DevTools Protocol (CDP) endpoint
-
----
-
-## 9. Session & Cookie Management
+## 7. Session & Cookie Management
 
 Sessions are per-agent-connection and held in memory. No persistence across MCP server restarts by default (opt-in via config).
 
@@ -632,7 +493,7 @@ Sessions are per-agent-connection and held in memory. No persistence across MCP 
 // src/session/store.rs
 
 pub struct Session {
-    pub id: Uuid,
+    pub id: String,                   // 4-char Crockford base32
     pub cookies: CookieStore,         // cookie_store crate
     pub custom_headers: HeaderMap,
     pub history: Vec<HistoryEntry>,
@@ -643,24 +504,41 @@ pub struct Session {
 }
 
 pub struct SessionStore {
-    sessions: Arc<DashMap<Uuid, Session>>,
+    sessions: Arc<DashMap<String, Session>>,
     ttl: Duration,   // default: 30 minutes
+    max_sessions: usize,
 }
 
 impl SessionStore {
-    pub fn get_or_create(&self, id: Option<Uuid>) -> Uuid { ... }
-    pub fn with_session<F, R>(&self, id: Uuid, f: F) -> R { ... }
-    pub fn cleanup_expired(&self) { ... }  // called by background task
+    pub fn create(&self) -> String { ... }    // returns a new 4-char id
+    pub fn with_session<F, R>(&self, id: Option<String>, f: F) -> R { ... }
+    pub fn cleanup_expired(&self) { ... }     // called by background task
 }
 ```
 
+### Session ID format
+
+Session IDs are 4 characters from the Crockford base32 alphabet
+`0123456789abcdefghjkmnpqrstvwxyz` (32 chars, no `I`/`L`/`O`/`U` to avoid
+visual ambiguity with `1`/`1`/`0`/`V`). IDs are case-insensitive on input and
+normalized to lowercase for storage. 32^4 = 1,048,576 unique IDs.
+
+Entropy is sourced from `Uuid::new_v4()` (cryptographically strong, OS RNG)
+and packed as 20 bits across 4 base32 chars (5 bits each). With the default
+`max_sessions = 50`, collision probability is ~0.005% per `create()` call;
+the 50% birthday-paradox threshold is ~1024 items, so the store is well
+within the safe zone and `create()`'s retry loop is effectively a no-op.
+
+The `src/session/id.rs` module exposes `generate()` and `validate(&str)` for
+this format; `tools::parse_session_id` is a thin wrapper around `validate`.
+
 ### Cookie sharing between tiers
 
-All tiers within the same session share that session's cookie jar. Tier 1 sets cookies via reqwest's jar. Tier 3 (Deno) receives cookies as serialized JSON and returns any new cookies it received, which are merged back.
+All tiers within the same session share that session's cookie jar. Tier 1 sets cookies via reqwest's jar. Tier 2 (Deno) receives cookies as serialized JSON and returns any new cookies it received, which are merged back.
 
 ---
 
-## 10. Data Flow & State
+## 8. Data Flow & State
 
 ### navigate() call flow
 
@@ -668,7 +546,7 @@ All tiers within the same session share that session's cookie jar. Tier 1 sets c
 agent calls navigate(url)
        │
        ▼
-SessionStore.get_or_create(session_id)
+SessionStore.get_or_create(session_id)   // or create() if id is None
        │
        ▼
 Tier Router
@@ -677,19 +555,9 @@ Tier Router
   │    ├── success + content?  →  HtmlPage.extract_text()  →  return result
   │    └── empty shell?
   │         │
-  │         ├─ if escalate_skip_quickjs = true  →  jump to Tier3Deno
-  │         │
-  │         └─ Tier2QuickJs.render(html, scripts)
-  │              ├── renders ok?  →  return result
-  │              └── browser API miss?
-  │                   │
-  │                   ├─ Tier3Deno.render(request)
-  │                   │    ├── success?  →  return result
-  │                   │    └── fails?
-  │                   │         │
-  │                   │         └─ Tier4Remote.render(url)  →  return
-  │                   │
-  │                   └─ (Deno path)
+  │         └─ Tier2Deno.render(request)
+  │              ├── success?  →  return result
+  │              └── fails?    →  return error (no further tier)
   │
   └── SessionStore.update(page, history, cookies)
 ```
@@ -703,15 +571,13 @@ pub struct PageResult {
     pub text: String,              // clean text for LLM
     pub html: Option<String>,      // raw HTML if requested
     pub links: Vec<Link>,
-    pub tier_used: u8,
-    pub escalation_path: Vec<u8>,  // e.g. [1, 2, 3]
     pub elapsed_ms: u64,
 }
 ```
 
 ---
 
-## 11. Configuration
+## 9. Configuration
 
 ### `config.toml`
 
@@ -723,27 +589,17 @@ max_redirects = 10
 max_body_bytes = 10_485_760   # 10MB
 
 [tiers]
-enabled = [1, 2, 3, 4]          # disable tiers to lock down; 4 (remote) is opt-in
-max_tier = 3                     # don't use remote fallback unless explicit
+enabled = [1, 2]               # tier 2 (Deno) is required for interactive tools
+max_tier = 2
 escalate_on_empty_dom = true
 escalate_threshold_bytes = 500  # escalate if body text < this
-escalate_skip_quickjs = false    # set true to skip Tier 2 (T1 → T3 directly)
 
 [tier2]
-js_heap_mb = 64
-execution_timeout_ms = 5000
-
-[tier3]
 deno_path = "/usr/local/bin/deno"     # or "deno" if on PATH
 script_path = "./deno/render.ts"
 pool_size = 2
 idle_timeout_secs = 30
 render_timeout_ms = 10000
-
-[tier4]
-endpoint = "https://chrome.browserless.io"
-token = ""                            # set via env: BROWSERLESS_TOKEN
-screenshot_timeout_ms = 15000
 
 [security]
 allowed_hosts = []                # empty = no host filter; populate for prod
@@ -764,15 +620,14 @@ log_level = "info"                # debug | info | warn | error
 
 | Env var | Config key |
 |---------|-----------|
-| `BROWSERLESS_TOKEN` | `tier4.token` |
-| `DENO_PATH` | `tier3.deno_path` |
+| `DENO_PATH` | `tier2.deno_path` |
 | `MCP_TRANSPORT` | `server.transport` |
 | `MCP_MAX_TIER` | `tiers.max_tier` |
 | `MCP_LOG_LEVEL` | `server.log_level` |
 
 ---
 
-## 12. Error Handling Strategy
+## 10. Error Handling Strategy
 
 ```rust
 // src/error.rs
@@ -788,17 +643,11 @@ pub enum BrowserError {
     #[error("Parse error: {0}")]
     Parse(String),
 
-    #[error("QuickJS execution failed: {0}")]
-    QuickJs(String),
-
     #[error("Deno subprocess failed: {stderr}")]
     DenoFailed { stderr: String },
 
     #[error("Deno not found at path: {path}")]
     DenoNotFound { path: String },
-
-    #[error("All tiers exhausted for {url}")]
-    AllTiersFailed { url: String },
 
     #[error("Tier {tier} disabled in config")]
     TierDisabled { tier: u8 },
@@ -806,24 +655,33 @@ pub enum BrowserError {
     #[error("Session not found: {id}")]
     SessionNotFound { id: String },
 
+    #[error("No current page in session")]
+    NoCurrentPage,
+
     #[error("Selector not found: {selector}")]
     SelectorNotFound { selector: String },
 
-    #[error("Remote fallback error: {0}")]
-    Remote(String),
+    #[error("Security: host not in allowlist: {host}")]
+    SecurityViolation { host: String },
 
     #[error("Timeout after {ms}ms")]
     Timeout { ms: u64 },
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("URL parse error: {0}")]
+    Url(#[from] url::ParseError),
 }
 ```
 
 ### MCP error mapping
 
-All `BrowserError` variants are mapped to structured MCP error responses so the agent can react (e.g. retry with `force_tier: 4` if told tier 3 failed).
+All `BrowserError` variants are mapped to structured MCP error responses via the `IntoMcpError` extension trait (see `PLAN_PHASE_1.md`). The mapping uses JSON-RPC standard codes (`InvalidParams` -32602, `InternalError` -32603) plus a small set of custom application codes in the -32000 to -32099 range for domain cases.
 
 ---
 
-## 13. Resource Budgets
+## 11. Resource Budgets
 
 ### RAM targets
 
@@ -831,18 +689,16 @@ All `BrowserError` variants are mapped to structured MCP error responses so the 
 |-------|--------|
 | Server idle (0 sessions) | <5MB |
 | 1 active session, tier 1 | <10MB |
-| 1 active session, tier 2 (QuickJS) | <20MB |
-| 1 active session, tier 3 (Deno) | <40MB (TBD — pending baseline benchmark) |
+| 1 active session, tier 2 (Deno) | <40MB (TBD — pending baseline benchmark) |
 | 10 concurrent sessions, tier 1 | <50MB |
-| 10 concurrent sessions, tier 3 | <200MB (TBD) |
+| 10 concurrent sessions, tier 2 | <200MB (TBD) |
 
 ### CPU targets
 
 | Operation | Target |
 |-----------|--------|
 | Tier 1 fetch + parse | <5ms CPU |
-| Tier 2 QuickJS render | <50ms CPU |
-| Tier 3 Deno spawn + render | <200ms CPU |
+| Tier 2 Deno spawn + render | <200ms CPU |
 
 ### Binary size targets
 
@@ -854,27 +710,27 @@ All `BrowserError` variants are mapped to structured MCP error responses so the 
 
 ---
 
-## 14. Cargo.toml
+## 12. Cargo.toml
 
 ```toml
 [package]
-name = "browser-mcp"
+name = "slim-atlas"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "browser-mcp"
+name = "slim-atlas"
 path = "src/main.rs"
 
 [dependencies]
 # MCP
-rmcp = { version = "0.1", features = ["server", "transport-io", "transport-sse"] }
+rmcp = { version = "1.7", features = ["server", "macros", "transport-io", "schemars"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # HTTP
-reqwest = { version = "0.12", features = [
+reqwest = { version = "0.13", features = [
     "cookies",
     "rustls-tls",
     "json",
@@ -886,10 +742,6 @@ reqwest = { version = "0.12", features = [
 # HTML parsing
 html5ever = "0.27"
 scraper = "0.20"
-lol_html = "2.0"
-
-# JS engine (tier 2)
-rquickjs = { version = "0.6", features = ["full"] }
 
 # URL handling
 url = "2"
@@ -904,14 +756,11 @@ config = "0.14"
 
 # Error handling
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 
 # Utilities
 dashmap = "6"      # concurrent hashmap for session store
 uuid = { version = "1", features = ["v4"] }
-regex = "1"
-base64 = "0.22"
-bytes = "1"
 
 # Logging
 tracing = "0.1"
@@ -931,56 +780,45 @@ strip = true
 
 ---
 
-## 15. Implementation Phases
+## 13. Implementation Phases
 
-**v1 ships at the end of Phase 4.** Phase 5 is optional post-v1 polish.
+**v1 ships at the end of Phase 3.** Phase 4 is optional post-v1 polish.
 
 ### Phase 1 — Core HTTP + MCP (Week 1–2)
 
 - [ ] Project scaffold, Cargo.toml, module structure
 - [ ] `Config` loading from toml + env
-- [ ] `BrowserError` enum
+- [ ] `BrowserError` enum + `IntoMcpError` extension trait
 - [ ] `SessionStore` with TTL cleanup, per-session cookie isolation
 - [ ] `Tier1Http` — reqwest client with per-session cookie jar
-- [ ] `HtmlPage` — text/link extraction, empty shell detection
+- [ ] `HtmlPage` — text/link extraction, empty shell detection, framework hints
 - [ ] MCP server bootstrap with `rmcp` (stdio transport)
-- [ ] `navigate`, `get_text`, `get_links`, `reset` tools wired up
-- [ ] Basic integration test: fetch static site
+- [ ] `navigate`, `get_text` (with optional selector), `get_links`, `get_html`, `query`, `get_history`, `reset` tools
+- [ ] Basic integration tests via wiremock
 - [ ] Baseline RAM benchmark: Tier 1 path
 
 ### Phase 2 — Router + Classifier (Week 3, ~3-4 days)
 
 - [ ] `Classifier` — framework detection heuristics (`FrameworkHint`)
-- [ ] `Escalator` — retry logic between tiers (T1 → T2 → T3 → T4)
-- [ ] `query`, `get_html`, `get_history` tools
+- [ ] `Escalator` — T1 → T2 (Deno) escalation
 - [ ] Unit tests for classifier heuristics
-- [ ] Verify `escalate_skip_quickjs` flag correctly bypasses Tier 2
+- [ ] Configurable `escalate_threshold_bytes`
 
-### Phase 3 — QuickJS Tier + Interactive Tools (Week 4–5) — **gates v1**
-
-- [ ] `js/dom_shim.js` — minimal DOM surface for React/Vue render cycle
-- [ ] `Tier2QuickJs` — runtime setup, script injection
-- [ ] fetch proxy — route JS `fetch()` calls back to reqwest
-- [ ] escalation signal detection from QuickJS errors
-- [ ] `click`, `fill`, `submit`, `run_js` tools
-- [ ] Tests against known React SSR and CSR pages
-- [ ] Decision gate: if QuickJS shim is too fragile, flip `escalate_skip_quickjs = true` and continue
-
-### Phase 4 — Deno Tier (Week 6–7) — **gates v1**
+### Phase 3 — Deno Tier + Interactive Tools (Week 4–5) — **gates v1**
 
 - [ ] `deno/render.ts` — SPA renderer script (pin `deno_dom` to a specific version hash via `deno.lock`)
 - [ ] `deno/dom_shim.ts` — deno_dom helpers
-- [ ] `Tier3Deno` — subprocess spawn with permission flags (explicit host:port in `--allow-net`)
+- [ ] `Tier2Deno` — subprocess spawn with permission flags (explicit host:port in `--allow-net`)
 - [ ] `DenoPool` — warm process pool (size 2)
 - [ ] Cookie round-trip: Rust → Deno (JSON) → Rust
 - [ ] `wait_for` selector support
+- [ ] `click`, `fill`, `submit`, `run_js` tools
 - [ ] `screenshot` tool (Deno only)
 - [ ] Tests: Next.js CSR, Angular SPA, Vue SPA
 - [ ] Cross-platform smoke: Linux x86_64, macOS aarch64, macOS x86_64
 
-### Phase 5 — Remote Fallback + Polish (Week 8, optional)
+### Phase 4 — Polish (Week 6, optional)
 
-- [ ] `Tier4Remote` — browserless.io client
 - [ ] SSE transport option
 - [ ] `set_headers`, `get_cookies` tools
 - [ ] Full escalation path logged in response metadata
@@ -990,7 +828,7 @@ strip = true
 
 ---
 
-## 16. Testing Strategy
+## 14. Testing Strategy
 
 ### Unit tests
 
@@ -1014,7 +852,7 @@ Test full navigate() flow against real URLs (gated behind `#[ignore]`, run in CI
 ```rust
 #[tokio::test]
 #[ignore = "requires network"]
-async fn test_nextjs_csr_site_escalates_to_tier4() { ... }
+async fn test_nextjs_csr_site_escalates_to_tier2() { ... }
 ```
 
 ### Test matrix
@@ -1023,55 +861,53 @@ async fn test_nextjs_csr_site_escalates_to_tier4() { ... }
 |-----------|--------------|------|
 | `example.com` | 1 | unit |
 | Next.js SSR (`nextjs.org`) | 1 | integration |
-| Next.js CSR | 2 or 3 | integration |
-| Create React App | 3 | integration |
+| Next.js CSR | 2 | integration |
+| Create React App | 2 | integration |
 | Angular Universal | 1 | integration |
-| Angular CSR | 3 | integration |
+| Angular CSR | 2 | integration |
 
 ---
 
-## 17. Open Questions
+## 15. Open Questions
 
-1. **Deno bundling** — ✅ **Resolved (defer to Phase 5).** v1 documents `curl https://deno.land/install.sh | sh` as a prereq; revisit embedding via `deno compile` + `include_bytes!` if install friction surfaces.
+1. **Deno bundling** — ✅ **Resolved (defer to Phase 4).** v1 documents `curl https://deno.land/install.sh | sh` as a prereq; revisit embedding via `deno compile` + `include_bytes!` if install friction surfaces.
 
 2. **Cookie persistence** — should session state optionally serialize to disk (SQLite via `rusqlite`) for long-running agent tasks that outlive the MCP process?
 
-3. **JS sandbox escapes** — QuickJS tier currently trusts the page scripts. Should we add a pre-execution static analysis step to detect and strip potentially dangerous patterns? (Worth doing only if we observe abuse in the wild; defer.)
+3. **Deno script sandbox escapes** — Tier 2 currently trusts the page scripts run via Deno's `eval`. Should we add a pre-execution static analysis step to detect and strip potentially dangerous patterns, or rely entirely on Deno's `--allow-net=host` isolation? (Worth doing only if we observe abuse in the wild; defer.)
 
-4. **Concurrent sessions** — the current design uses one cookie jar per session. For high-concurrency use (10+ agents), should we pool reqwest clients or keep one per session? **Tentative answer: one shared `reqwest::Client` (connection pool), one `cookie::Jar` per session via `cookie_provider`.** Validate in Phase 1 benchmark.
+4. **Concurrent sessions** — the current design uses one cookie jar per session. For high-concurrency use (10+ agents), should we pool reqwest clients or keep one per session? **Resolved (v3): one `reqwest::Client` per session.** The original tentative answer (shared client + per-session jar) is not implementable with stock reqwest; per-session `Client` is correct and within the resource budget. Validate in Phase 1 benchmark.
 
 5. **Deno version pinning** — ✅ **Resolved.** Pin `deno_dom` to a specific version hash in `deno.lock` from day 1; commit the lockfile. No `https://deno.land/x/.../latest` imports in `render.ts`.
 
-6. **Form-submit in Tier 1** — currently `click`/`fill`/`submit` work only in Tier 2+. Worth implementing a form-submit simulation in Tier 1 (parse form action + method, POST directly) for simple cases? **Likely no** — most real agent flows hit JS-driven forms; the engineering cost is not justified.
+6. **Form-submit in Tier 1** — currently `click`/`fill`/`submit` work only in Tier 2. Worth implementing a form-submit simulation in Tier 1 (parse form action + method, POST directly) for simple cases? **Likely no** — most real agent flows hit JS-driven forms; the engineering cost is not justified.
 
 7. **Binary distribution** — three options:
-   - (a) Document `curl install.deno.net | sh` as a prereq; `cargo install browser-mcp` (current plan, simplest)
+   - (a) Document `curl install.deno.net | sh` as a prereq; `cargo install slim-atlas` (current plan, simplest)
    - (b) Embed a pre-compiled Deno binary via `include_bytes!` per platform (single binary, +~80MB)
-   - (c) Bootstrap: first run downloads the right Deno, caches in `~/.cache/browser-mcp/`
-   **Defer to Phase 5** — pick based on user feedback from v1.
+   - (c) Bootstrap: first run downloads the right Deno, caches in `~/.cache/slim-atlas/`
+   **Defer to Phase 4** — pick based on user feedback from v1.
 
 8. **Distribution channel (new)** — where does the end user get the binary?
    - `cargo install` (CLI users)
    - Homebrew tap (macOS users)
    - npm wrapper that downloads the binary (Claude Desktop users)
    - All of the above
-   **Defer to Phase 5** but discuss with users early.
+   **Defer to Phase 4** but discuss with users early.
 
 ---
 
-## 18. Security
+## 16. Security
 
-Because `browser-mcp` executes arbitrary page-supplied JavaScript (Tier 2) and can issue arbitrary network requests (all tiers), it is a non-trivial attack surface when an untrusted agent prompt is processed. The following are baseline protections; expand as we learn from real-world use.
+Because `slim-atlas` executes arbitrary page-supplied JavaScript (Tier 2) and can issue arbitrary network requests (all tiers), it is a non-trivial attack surface when an untrusted agent prompt is processed. The following are baseline protections; expand as we learn from real-world use.
 
 ### Domain allowlist (`[security].allowed_hosts`)
 
 - Empty list = no filter (development default).
 - Populated list = reject all navigation/fetch/proxy requests to hosts not in the list. The check applies at:
   - Tier 1: `reqwest` request URL
-  - Tier 2: every JS `fetch()` proxied to reqwest
-  - Tier 3: enforced as the `--allow-net=host:port` arg when spawning Deno
-  - Tier 4: outbound to the configured remote endpoint only (no host check needed)
-- Pattern matching supports exact host (`example.com`) and wildcard subdomains (`*.example.com`).
+  - Tier 2: enforced as the `--allow-net=host:port` arg when spawning Deno
+- Pattern matching supports exact host (`example.com`) and wildcard subdomains (`*.example.com`); `*.example.com` does NOT match the bare `example.com`. Port-sensitive (`example.com:8080` matches only that port).
 
 ### Cookie isolation
 
@@ -1082,7 +918,7 @@ Because `browser-mcp` executes arbitrary page-supplied JavaScript (Tier 2) and c
 
 - When `true` (default), `Set-Cookie` headers from cross-origin responses are dropped before being merged into the session jar. This matches browser default behavior since 2023.
 
-### Subprocess sandboxing (Tier 3 Deno)
+### Subprocess sandboxing (Tier 2 Deno)
 
 - `--allow-net=host:port` — only the target host, never wildcard
 - `--allow-env=false`, `--allow-read=false`, `--allow-write=false`, `--allow-run=false`, `--allow-ffi=false`
@@ -1090,9 +926,8 @@ Because `browser-mcp` executes arbitrary page-supplied JavaScript (Tier 2) and c
 
 ### Force-tier advisory
 
-When an agent calls `navigate` with `force_tier: 4` (remote), the server logs a warning and the call must be confirmed by config flag `allow_remote_fallback = true` in production deployments. Otherwise the call returns `BrowserError::TierDisabled`.
+When an agent calls `navigate` with `force_tier: 2`, the server logs which tier was used in the response metadata. The `max_tier` config cap (default 2) prevents accidental escalation beyond the intended tier in production.
 
 ### Secret redaction
 
 - `Authorization`, `Cookie`, and `Set-Cookie` headers are redacted from `tracing` output at all log levels.
-- The configured `tier4.token` (browserless.io) is never logged, even at debug level.
