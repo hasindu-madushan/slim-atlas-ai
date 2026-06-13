@@ -5,6 +5,7 @@ import { log } from './logger.js';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
+const RESOURCE_LOGGING_ENABLED = process.env.RESOURCE_LOGGING_ENABLED !== 'false';
 
 export type BrowserType = 'lightpanda' | 'chrome';
 
@@ -207,11 +208,19 @@ export class SessionManager {
     await this.chromePool.shutdown();
   }
 
-  getStats() {
+  async getStats() {
     return {
       sessions: this.sessions.size,
-      lightpanda: this.lpPool.getStats(),
-      chrome: this.chromePool.getStats(),
+      lightpanda: await this.lpPool.getStats(),
+      chrome: await this.chromePool.getStats(),
     };
+  }
+
+  async logResourceUsage(): Promise<void> {
+    if (!RESOURCE_LOGGING_ENABLED) return;
+    const stats = await this.getStats();
+    const lpMb = (stats.lightpanda.memoryBytes / 1024 / 1024).toFixed(1);
+    const chromeMb = (stats.chrome.memoryBytes / 1024 / 1024).toFixed(1);
+    log.info('resources', `Sessions: ${stats.sessions} | Lightpanda: ${stats.lightpanda.total} instances (${lpMb} MB) | Chrome: ${stats.chrome.total} instances (${chromeMb} MB)`);
   }
 }

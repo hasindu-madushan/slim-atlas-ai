@@ -35,6 +35,16 @@ function isPortInUse(port: number): Promise<boolean> {
   });
 }
 
+function getProcessMemoryBytes(pid: number): Promise<number> {
+  return new Promise((resolve) => {
+    exec(`ps -p ${pid} -o rss=`, (err, stdout) => {
+      if (err) return resolve(0);
+      const kb = parseInt(stdout.trim(), 10);
+      resolve(isNaN(kb) ? 0 : kb * 1024);
+    });
+  });
+}
+
 export class LightpandaPool {
   private instances: LightpandaInstance[] = [];
   private available: LightpandaInstance[] = [];
@@ -181,13 +191,25 @@ export class LightpandaPool {
     this.waitQueue = [];
   }
 
-  getStats() {
+  async getStats() {
+    const memoryBytes = await this.getMemoryUsageBytes();
     return {
       total: this.instances.length,
       available: this.available.length,
       inUse: this.inUse.size,
       maxSize: MAX_SIZE,
+      memoryBytes,
     };
+  }
+
+  async getMemoryUsageBytes(): Promise<number> {
+    let total = 0;
+    for (const inst of this.instances) {
+      if (inst.process.pid) {
+        total += await getProcessMemoryBytes(inst.process.pid);
+      }
+    }
+    return total;
   }
 
   async killOrphaned(activeInstanceIds: Set<string>): Promise<void> {

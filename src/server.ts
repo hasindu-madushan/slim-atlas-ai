@@ -259,6 +259,7 @@ export class PuppeteerMCPServer {
     if (!this.sessionManager.has(sessionId)) {
       log.info(sessionId, `New session, acquiring browser (chrome=${useChrome})`);
       await this.sessionManager.acquire(sessionId, useChrome || this.sessionManager.shouldPreferChrome(sessionId));
+      await this.sessionManager.logResourceUsage();
     } else if (useChrome && CHROME_ENABLED && this.sessionManager.getBrowserType(sessionId) !== 'chrome') {
       log.info(sessionId, `Switching to Chrome`);
       await this.sessionManager.acquire(sessionId, true);
@@ -402,6 +403,8 @@ export class PuppeteerMCPServer {
         if (idleIds.length > 0) {
           log.info('cleanup', `Cleaned ${idleIds.length} idle session(s)`);
         }
+
+        await this.sessionManager.logResourceUsage();
       } catch (e) {
         log.error('cleanup', `Cleanup job error: ${(e as Error).message}`);
       }

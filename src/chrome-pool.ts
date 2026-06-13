@@ -1,8 +1,19 @@
 import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer';
+import { exec } from 'child_process';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 
 const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
+
+function getProcessMemoryBytes(pid: number): Promise<number> {
+  return new Promise((resolve) => {
+    exec(`ps -p ${pid} -o rss=`, (err, stdout) => {
+      if (err) return resolve(0);
+      const kb = parseInt(stdout.trim(), 10);
+      resolve(isNaN(kb) ? 0 : kb * 1024);
+    });
+  });
+}
 
 interface ChromeSlot {
   id: string;
@@ -133,14 +144,22 @@ export class ChromePool {
     this.waitQueue = [];
   }
 
-  getStats() {
+  async getStats() {
+    const memoryBytes = await this.getMemoryUsageBytes();
     return {
       total: this.inUse.size + this.available.length,
       available: this.available.length,
       inUse: this.inUse.size,
       maxSize: MAX_SIZE,
       browserConnected: this.browser?.connected ?? false,
+      memoryBytes,
     };
+  }
+
+  async getMemoryUsageBytes(): Promise<number> {
+    const proc = this.browser?.process();
+    if (!proc?.pid) return 0;
+    return getProcessMemoryBytes(proc.pid);
   }
 
   async killOrphaned(activeSlotIds: Set<string>): Promise<void> {
