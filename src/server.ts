@@ -4,7 +4,6 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { isCrashError } from './browser.js';
 import { SessionManager } from './session.js';
 import { log } from './logger.js';
 import type { ChromeManager } from './chrome.js';
@@ -17,6 +16,25 @@ function generateSessionId(): string {
   let id = '';
   for (let i = 0; i < 4; i++) id += SESSION_ID_CHARS[Math.floor(Math.random() * SESSION_ID_CHARS.length)];
   return id;
+}
+
+function isCrashError(error: any): boolean {
+  const msg = (error?.message || error || '').toLowerCase();
+  return (
+    msg.includes('target closed') ||
+    msg.includes('session closed') ||
+    msg.includes('segfault') ||
+    msg.includes('segmentation') ||
+    msg.includes('detached') ||
+    msg.includes('not connected') ||
+    msg.includes('connection closed')
+  );
+}
+
+function normalizeNodeId(args: Record<string, any>): number | undefined {
+  if (args.nodeId !== undefined) return Number(args.nodeId);
+  if (args.node_id !== undefined) return Number(args.node_id);
+  return undefined;
 }
 
 export class PuppeteerMCPServer {
@@ -86,10 +104,10 @@ export class PuppeteerMCPServer {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
-                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended)' },
-                selector: { type: 'string', description: 'CSS selector (use only if nodeId not available)' },
+                selector: { type: 'string', description: 'Node ID (from snapshot) or CSS selector' },
+                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended, overrides selector if both provided)' },
               },
-              required: ['session_id'],
+              required: ['session_id', 'selector'],
             },
           },
           {
@@ -99,12 +117,12 @@ export class PuppeteerMCPServer {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
-                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended)' },
-                selector: { type: 'string', description: 'CSS selector (use only if nodeId not available)' },
+                selector: { type: 'string', description: 'Node ID (from snapshot) or CSS selector' },
+                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended, overrides selector if both provided)' },
                 text: { type: 'string', description: 'Text to type' },
                 delay: { type: 'number', description: 'Delay between keystrokes in ms', default: 0 },
               },
-              required: ['session_id', 'text'],
+              required: ['session_id', 'selector', 'text'],
             },
           },
           {
@@ -273,6 +291,7 @@ export class PuppeteerMCPServer {
   private async executeWithManager(sessionId: string, manager: ChromeManager, toolName: string, args: Record<string, any>): Promise<any> {
     const browserType = this.sessionManager.getBrowserType(sessionId) || 'lightpanda';
     const prefix = `session_id: ${sessionId}`;
+    log.debug(sessionId, `${toolName} args: ${JSON.stringify(args)}`);
 
     switch (toolName) {
       case 'browser_navigate':
@@ -286,21 +305,38 @@ export class PuppeteerMCPServer {
       }
 
       case 'browser_view_node': {
-        const nodeResult = await manager.viewNode(args.nodeId);
+        const viewNodeId = normalizeNodeId(args);
+        const nodeResult = await manager.viewNode(viewNodeId!);
         if (nodeResult.type === 'image') return { content: [{ type: 'image', data: nodeResult.content, mimeType: 'image/png' }] };
         return { content: [{ type: 'text', text: `${prefix}\nresult: ${nodeResult.content}` }] };
       }
 
       case 'browser_click': {
-        const sel = args.nodeId !== undefined ? await manager.getSelectorByNodeId(args.nodeId) : args.selector;
-        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required'}` }] };
+        const clickNodeId = normalizeNodeId(args);
+        let sel: string | null;
+        if (clickNodeId !== undefined) {
+          sel = await manager.getSelectorByNodeId(clickNodeId);
+        } else if (args.selector && /^\d+$/.test(String(args.selector))) {
+          sel = await manager.getSelectorByNodeId(Number(args.selector));
+        } else {
+          sel = args.selector ?? null;
+        }
+        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${clickNodeId !== undefined ? `Node ID ${clickNodeId} not found` : 'Selector is required'}` }] };
         await manager.click(sel);
         return { content: [{ type: 'text', text: `${prefix}\nresult: Clicked: ${sel}` }] };
       }
 
       case 'browser_type': {
-        const typeSel = args.nodeId !== undefined ? await manager.getSelectorByNodeId(args.nodeId) : args.selector;
-        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required'}` }] };
+        const typeNodeId = normalizeNodeId(args);
+        let typeSel: string | null;
+        if (typeNodeId !== undefined) {
+          typeSel = await manager.getSelectorByNodeId(typeNodeId);
+        } else if (args.selector && /^\d+$/.test(String(args.selector))) {
+          typeSel = await manager.getSelectorByNodeId(Number(args.selector));
+        } else {
+          typeSel = args.selector ?? null;
+        }
+        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeNodeId !== undefined ? `Node ID ${typeNodeId} not found` : 'Selector is required'}` }] };
         await manager.type(typeSel, args.text, { delay: args.delay });
         return { content: [{ type: 'text', text: `${prefix}\nresult: Typed into: ${typeSel}` }] };
       }

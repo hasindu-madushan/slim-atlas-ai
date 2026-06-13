@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'child_process';
-import { browserManager } from '../src/browser.js';
+import { chromeManager } from '../src/chrome.js';
 
 describe('MCP Integration Tests', () => {
   let serverProcess: any;
@@ -21,7 +21,7 @@ describe('MCP Integration Tests', () => {
     if (serverProcess) {
       serverProcess.kill();
     }
-    await browserManager.close();
+    await chromeManager.close();
   });
 
   it('should start without errors', async () => {
@@ -64,39 +64,39 @@ describe('MCP Tool Schema Tests', () => {
 
 describe('Browser Automation Flow Tests', () => {
   beforeAll(async () => {
-    await browserManager.launch({ headless: true });
+    await chromeManager.launch({ headless: true });
   });
 
   afterAll(async () => {
-    await browserManager.close();
+    await chromeManager.close();
   });
 
   it('should perform a complete browsing flow', async () => {
-    await browserManager.navigate({ url: 'https://example.com' });
-    let info = await browserManager.getPageInfo();
+    await chromeManager.navigate({ url: 'https://example.com' });
+    let info = await chromeManager.getPageInfo();
     expect(info.url).toContain('example.com');
     
-    const snapshot = await browserManager.getSnapshot();
+    const snapshot = await chromeManager.getSnapshot();
     expect(snapshot.url).toContain('example.com');
     
-    const screenshot = await browserManager.takeScreenshot();
+    const screenshot = await chromeManager.takeScreenshot();
     expect(screenshot).toBeTruthy();
     
-    await browserManager.navigate({ url: 'https://example.org' });
-    info = await browserManager.getPageInfo();
+    await chromeManager.navigate({ url: 'https://example.org' });
+    info = await chromeManager.getPageInfo();
     expect(info.url).toContain('example.org');
   });
 
   it('should handle page reload', async () => {
-    await browserManager.navigate({ url: 'https://example.com' });
-    await browserManager.reload();
-    const info = await browserManager.getPageInfo();
+    await chromeManager.navigate({ url: 'https://example.com' });
+    await chromeManager.reload();
+    const info = await chromeManager.getPageInfo();
     expect(info.url).toContain('example.com');
   });
 
   it('should evaluate page content', async () => {
-    await browserManager.navigate({ url: 'https://example.com' });
-    const h1Text = await browserManager.evaluate(`
+    await chromeManager.navigate({ url: 'https://example.com' });
+    const h1Text = await chromeManager.evaluate(`
       (() => {
         const h1 = document.querySelector('h1');
         return h1 ? h1.textContent : null;

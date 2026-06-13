@@ -93,11 +93,19 @@ export class SessionManager {
     state.preferChrome = true;
     state.browserType = 'chrome';
 
+    // Preserve snapshot state (id -> selector mapping) across browser escalation
+    const snapshotState = state.manager?.getState();
+
     if (state.lpInstanceId) {
       await this.detachLightpanda(sessionId, state);
     }
 
     await this.attachChrome(sessionId, state);
+
+    if (snapshotState && state.manager) {
+      state.manager.setState(snapshotState);
+      log.debug(sessionId, `Restored snapshot state after switching to Chrome`);
+    }
   }
 
   private async detachLightpanda(sessionId: string, state: SessionState): Promise<void> {

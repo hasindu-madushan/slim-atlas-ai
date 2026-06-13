@@ -235,14 +235,22 @@ def cmd_run(client, tool_name, inline_args=""):
     for i, token in enumerate(inline_tokens):
         if i < len(required_params):
             provided[required_params[i]] = token
+    if "selector" in provided and provided["selector"].isdigit() and "nodeId" in props:
+        provided["nodeId"] = provided.pop("selector")
+    skip_required = set()
+    if "nodeId" in provided and "selector" in required:
+        skip_required.add("selector")
     args = {}
     for pname, pinfo in props.items():
         ptype = pinfo.get("type", "string")
         pdesc = pinfo.get("description", "")
         is_required = pname in required
-        if not is_required:
+        if pname in skip_required:
             continue
-        label = f"{c(Color.YELLOW, '*')}{c(Color.WHITE, pname)}"
+        if not is_required and pname not in provided:
+            continue
+        marker = c(Color.YELLOW, "*") if is_required else c(Color.GRAY, " ")
+        label = f"{marker}{c(Color.WHITE, pname)}"
         hint = f" ({ptype})"
         if pdesc:
             hint += f" - {pdesc}"
@@ -343,8 +351,7 @@ def main():
                 if len(parts) < 2:
                     print(c(Color.RED, "  Usage: run <tool_name> [args]"))
                 else:
-                    tool_parts = parts[1].split(None, 1)
-                    cmd_run(client, tool_parts[0], tool_parts[1] if len(tool_parts) > 1 else "")
+                    cmd_run(client, parts[1], parts[2] if len(parts) > 2 else "")
             elif cmd == "nav":
                 if len(parts) < 2:
                     print(c(Color.RED, "  Usage: nav <url>"))
@@ -369,7 +376,7 @@ def main():
                 else:
                     cmd_call(client, parts[1], parts[2] if len(parts) > 2 else "")
             elif cmd in client.tools:
-                cmd_run(client, cmd, parts[1] if len(parts) > 1 else "")
+                cmd_run(client, cmd, " ".join(parts[1:]) if len(parts) > 1 else "")
             else:
                 print(c(Color.GRAY, f"  Unknown command: {cmd}. Type 'help' for commands."))
     except KeyboardInterrupt:
