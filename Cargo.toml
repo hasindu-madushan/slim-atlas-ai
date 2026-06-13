@@ -68,6 +68,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Process / system metrics (RSS, child PIDs)
 sysinfo = "0.39"
 
+# Tier 2 Deno runtime — auto-install + cache
+zip = "2"
+sha2 = "0.10"
+dirs = "5"
+which = "6"
+
 [dev-dependencies]
 tokio-test = "0.4"
 wiremock = "0.6"

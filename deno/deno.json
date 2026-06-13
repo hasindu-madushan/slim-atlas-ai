@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "happy-dom": "npm:happy-dom@^16.8.1"
+  },
+  "lock": true
+}

@@ -1,5 +1,5 @@
-//! RSS memory sampling for the slim-atlas process (and, in Phase 3, its
-//! tier subprocesses).
+//! RSS memory sampling for the slim-atlas process (and its
+//! Deno subprocesses).
 //!
 //! Wraps `sysinfo::System` in a small struct so the rest of the codebase
 //! doesn't need to know about platform-specific process queries. The probe

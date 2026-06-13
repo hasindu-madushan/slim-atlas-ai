@@ -18,8 +18,8 @@ pub enum BrowserError {
     #[error("Deno not found at path: {path}")]
     DenoNotFound { path: String },
 
-    #[error("Tier {tier} disabled in config or not yet implemented")]
-    TierDisabled { tier: u8 },
+    #[error("Deno install failed: {reason}")]
+    DenoInstallFailed { reason: String },
 
     #[error("Session not found: {id}")]
     SessionNotFound { id: String },
@@ -50,7 +50,6 @@ pub type Result<T> = std::result::Result<T, BrowserError>;
 mod code {
     pub const SESSION_NOT_FOUND: i32 = -32001;
     pub const NO_CURRENT_PAGE: i32 = -32002;
-    pub const TIER_DISABLED: i32 = -32003;
     pub const SECURITY_VIOLATION: i32 = -32004;
     pub const TIMEOUT: i32 = -32005;
 }
@@ -60,7 +59,7 @@ mod code {
 /// Mapping rules (Q8):
 /// - `SelectorNotFound` -> `ErrorData::invalid_params` (-32602)
 /// - `Http`, `Network`, `Parse`, generic I/O, URL -> `ErrorData::internal_error` (-32603)
-/// - `SessionNotFound`, `NoCurrentPage`, `TierDisabled`, `SecurityViolation`, `Timeout`
+/// - `SessionNotFound`, `NoCurrentPage`, `SecurityViolation`, `Timeout`
 ///   -> custom application codes in the -32000 range
 /// - Everything else -> `ErrorData::internal_error` (-32603)
 pub trait IntoMcpError {
@@ -89,11 +88,6 @@ impl IntoMcpError for BrowserError {
             BrowserError::NoCurrentPage => McpError::new(
                 ErrorCode(code::NO_CURRENT_PAGE),
                 "no current page in session".to_string(),
-                None,
-            ),
-            BrowserError::TierDisabled { tier } => McpError::new(
-                ErrorCode(code::TIER_DISABLED),
-                format!("tier {tier} disabled in config or not yet implemented"),
                 None,
             ),
             BrowserError::SecurityViolation { host } => McpError::new(

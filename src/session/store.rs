@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::error::{BrowserError, Result};
 use crate::session::cookie;
 use crate::session::id;
-use crate::tiers::tier1_http::FrameworkHint;
+use crate::deno::framework::FrameworkHint;
 
 /// Parsed, retainable snapshot of a fetched page.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -25,7 +25,6 @@ pub struct CurrentPage {
 pub struct HistoryEntry {
     pub url: String,
     pub title: String,
-    pub tier: u8,
     pub timestamp_ms: u64,
 }
 
@@ -35,7 +34,6 @@ pub struct Session {
     pub custom_headers: HeaderMap,
     pub history: Vec<HistoryEntry>,
     pub current_page: Option<CurrentPage>,
-    pub current_tier: u8,
     pub last_framework_hint: Option<FrameworkHint>,
     pub created_at: std::time::Instant,
     pub last_active: std::time::Instant,
@@ -50,7 +48,6 @@ impl Session {
             custom_headers: HeaderMap::new(),
             history: Vec::new(),
             current_page: None,
-            current_tier: 0,
             last_framework_hint: None,
             created_at: now,
             last_active: now,
@@ -62,15 +59,11 @@ impl Session {
     }
 
     pub fn soft_reset(&mut self) {
-        // Replace the cookie jar with a fresh empty one. Callers that hold
-        // the old `Arc<Jar>` (i.e. the `reqwest::Client` in `Tier1Http`) need
-        // to be rebuilt to see the new jar. The MCP layer handles this in
-        // `tools::reset` by calling `tier1.rebuild_for_session(...)`.
+        // Replace the cookie jar with a fresh empty one.
         let _old = self.cookies.replace_with_empty();
         self.custom_headers.clear();
         self.history.clear();
         self.current_page = None;
-        self.current_tier = 0;
         self.last_framework_hint = None;
         self.touch();
     }
@@ -208,7 +201,6 @@ mod tests {
             s.history.push(HistoryEntry {
                 url: "x".into(),
                 title: "t".into(),
-                tier: 1,
                 timestamp_ms: 0,
             });
             Ok(s.history.len())
@@ -256,7 +248,6 @@ mod tests {
                 s.history.push(HistoryEntry {
                     url: "x".into(),
                     title: "t".into(),
-                    tier: 1,
                     timestamp_ms: 0,
                 });
                 s.current_page = Some(CurrentPage {

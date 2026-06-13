@@ -93,9 +93,11 @@ Request
                  │ escalate
                  ▼
 ┌──────────────────────────────────┐
-│ Tier 2: Deno subprocess          │  ~30MB+ RAM | <300ms
-│  full Web APIs + deno_dom        │
-│  sandboxed with --allow-net=host │
+│ Tier 2: Deno + happy-dom subproc │  ~3MB+ RAM | <150ms
+│  happy-dom runs inlined scripts  │
+│  scripts pre-fetched via Deno's  │
+│  allowlisted fetch, then inlined │
+│  → sandbox preserved end-to-end  │
 │                                  │
 │  ✅ pass if: SPA renders          │
 │  ✅ always: interactive tools     │
@@ -401,62 +403,83 @@ impl DenoRenderer {
 
 ### Deno render script (`deno/render.ts`)
 
+The script is the boundary between Rust (which owns the network,
+cookies, and security) and JavaScript (which owns the DOM). It
+reads one JSON request from stdin, runs the requested action,
+writes one JSON response to stdout, exits.
+
 ```typescript
-import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.45/deno-dom-wasm.ts";
+import { Window } from "happy-dom";
 
-interface RenderRequest {
+interface DenoRequest {
+  protocol_version: number;        // must equal PROTOCOL_VERSION (1)
+  mode: "render" | "click" | "fill" | "submit";
   url: string;
-  html: string;              // pre-fetched HTML from Rust
-  scripts: string[];         // extracted script contents
-  wait_for?: string;         // CSS selector to wait for
-  timeout_ms: number;
+  html?: string;                   // required for click/fill/submit
+  cookies: CookieEntry[];
+  headers: Record<string, string>;
+  selector?: string;               // click/fill
+  value?: string;                  // fill
+  wait_for?: string;               // render only
+  wait_timeout_ms?: number;
+  render_timeout_ms: number;
 }
 
-interface RenderResult {
-  html: string;
-  text: string;
-  title: string;
-  links: Array<{ text: string; href: string }>;
-  error?: string;
-}
-
-const request: RenderRequest = JSON.parse(
-  new TextDecoder().decode(await Deno.stdin.readable
-    .getReader()
-    .read()
-    .then(r => r.value ?? new Uint8Array()))
-);
-
-const parser = new DOMParser();
-const doc = parser.parseFromString(request.html, "text/html");
-
-// Patch fetch to use real network (allowed by --allow-net)
-// Run scripts in sequence
-for (const script of request.scripts) {
-  try {
-    await eval(script);  // sandboxed by Deno permissions
-  } catch (e) {
-    // log but continue
-  }
-}
-
-// Wait for selector if requested
-if (request.wait_for) {
-  // poll up to timeout_ms
-}
-
-const result: RenderResult = {
-  html: doc.documentElement?.outerHTML ?? "",
-  text: doc.body?.textContent ?? "",
-  title: doc.title,
-  links: Array.from(doc.querySelectorAll("a[href]")).map(a => ({
-    text: (a as HTMLAnchorElement).textContent?.trim() ?? "",
-    href: (a as HTMLAnchorElement).href,
-  })),
-};
-
-console.log(JSON.stringify(result));
+// 1. Parse request from stdin; verify protocol_version.
+// 2. If mode === "render", fetch the URL with Deno's allowlisted
+//    `fetch`; else use req.html directly.
+// 3. Walk the HTML; for each <script src="..."> tag, fetch the URL
+//    with Deno's allowlisted `fetch`, then replace the tag with
+//    <script>body</script>. This preserves the --allow-net=host:port
+//    sandbox for all subresource loads.
+// 4. Construct a happy-dom Window with disableJavaScriptFileLoading:
+//    true (we already inlined) and disableCSSFileLoading: true.
+// 5. document.write(inlined_html); document.close(); await
+//    window.happyDOM.waitUntilComplete().
+// 6. Seed cookies onto document.cookie.
+// 7. Dispatch the action (click/fill/submit/render).
+// 8. Optionally wait for `wait_for` selector.
+// 9. Serialize document.documentElement.outerHTML + body.textContent
+//    (excluding <script>/<style> content) + title + anchor links +
+//    set_cookies to JSON, write to stdout.
 ```
+
+The key choice is to **pre-fetch and inline** external scripts
+rather than rely on happy-dom's own subresource loader. happy-dom
+16's `Browser.goto` path uses node:http internally, which bypasses
+Deno's permission system — meaning with `--allow-net=host:port` set,
+external `<script src>` requests would be silently blocked. By
+doing the fetches ourselves with Deno's `fetch` (which is
+permission-checked), we keep the sandbox intact and the script
+bodies land in happy-dom as regular inline scripts, which it
+executes during parse. Production React / Vue / Angular SPA bundles
+(usually shipped as `<script src="/_next/static/chunks/main.js">`)
+are loaded and executed this way, which is what lets frameworks
+mount into the DOM tree. (The previous `deno_dom` was a parser
+only and never ran external scripts — SPA shells came back empty.)
+
+Cookies are round-tripped via `document.cookie`: the Rust side
+seeds the cookies (filtered by origin) by setting `document.cookie`
+on the constructed Window, and after the action runs we read
+`document.cookie` back and synthesize `Set-Cookie` header strings
+from the page's URL.
+
+### Why happy-dom and not Playwright?
+
+Tradeoff table (current decision: happy-dom):
+
+| | happy-dom (current) | Playwright (future) |
+|---|---|---|
+| SPA compat | ~85% (runs scripts) | ~100% (real Chromium) |
+| Bundle size | ~3 MB npm deps | ~250 MB Chromium binary |
+| Cold start per call | ~50 ms | ~1.5 s |
+| WebGL / Canvas | ❌ (no layout) | ✅ |
+| Bot detection | ❌ (UA-flagged) | ⚠️ (depends) |
+| Maintenance | low (npm:happy-dom) | low (npm:playwright) |
+
+The path forward: when happy-dom returns an empty shell (text
+length below `tiers.escalate_threshold_bytes` AND no useful DOM),
+the Rust escalator can retry with Playwright. That's Phase 3 work.
 
 ### Deno process pool
 
@@ -474,10 +497,10 @@ pub struct DenoPool {
 
 | Permission | Granted | Scope |
 |------------|---------|-------|
-| `--allow-net` | Yes | Target host only |
+| `--allow-net` | Yes | Origin + form actions + script/link/img/iframe hosts (max 16) |
+| `--allow-env` | Yes (no value list) | Required by happy-dom's npm transitive deps at import time |
 | `--allow-read` | No | — |
 | `--allow-write` | No | — |
-| `--allow-env` | No | — |
 | `--allow-run` | No | — |
 | `--allow-ffi` | No | — |
 
@@ -806,12 +829,12 @@ strip = true
 
 ### Phase 3 — Deno Tier + Interactive Tools (Week 4–5) — **gates v1**
 
-- [ ] `deno/render.ts` — SPA renderer script (pin `deno_dom` to a specific version hash via `deno.lock`)
-- [ ] `deno/dom_shim.ts` — deno_dom helpers
-- [ ] `Tier2Deno` — subprocess spawn with permission flags (explicit host:port in `--allow-net`)
-- [ ] `DenoPool` — warm process pool (size 2)
-- [ ] Cookie round-trip: Rust → Deno (JSON) → Rust
-- [ ] `wait_for` selector support
+- [x] `deno/render.ts` — SPA renderer script using happy-dom (pinned via `deno.lock`); pre-fetches `<script src>` URLs with Deno's allowlisted `fetch` and inlines the bodies so happy-dom executes them during parse
+- [x] `deno/dom_shim.ts` — DOM helpers (framework-agnostic, works with happy-dom)
+- [x] `Tier2Deno` — subprocess spawn with permission flags (explicit host:port in `--allow-net`)
+- [x] `DenoPool` — concurrency-bounded dispatcher (spawn-per-call in v1, warm pool deferred)
+- [x] Cookie round-trip: Rust → Deno (`document.cookie`) → Rust (synthesized `Set-Cookie` strings)
+- [x] `wait_for` selector support
 - [ ] `click`, `fill`, `submit`, `run_js` tools
 - [ ] `screenshot` tool (Deno only)
 - [ ] Tests: Next.js CSR, Angular SPA, Vue SPA
@@ -878,7 +901,7 @@ async fn test_nextjs_csr_site_escalates_to_tier2() { ... }
 
 4. **Concurrent sessions** — the current design uses one cookie jar per session. For high-concurrency use (10+ agents), should we pool reqwest clients or keep one per session? **Resolved (v3): one `reqwest::Client` per session.** The original tentative answer (shared client + per-session jar) is not implementable with stock reqwest; per-session `Client` is correct and within the resource budget. Validate in Phase 1 benchmark.
 
-5. **Deno version pinning** — ✅ **Resolved.** Pin `deno_dom` to a specific version hash in `deno.lock` from day 1; commit the lockfile. No `https://deno.land/x/.../latest` imports in `render.ts`.
+5. **Deno version pinning** — ✅ **Resolved.** Pin `happy-dom` (npm) and all transitive deps in `deno.lock` from day 1; commit the lockfile. No `https://deno.land/x/.../latest` imports in `render.ts`.
 
 6. **Form-submit in Tier 1** — currently `click`/`fill`/`submit` work only in Tier 2. Worth implementing a form-submit simulation in Tier 1 (parse form action + method, POST directly) for simple cases? **Likely no** — most real agent flows hit JS-driven forms; the engineering cost is not justified.
 

@@ -3,14 +3,15 @@ use std::sync::{Arc, Mutex};
 use url::Url;
 
 use crate::config::Config;
+use crate::deno::DenoRenderer;
+use crate::deno_runtime::DenoRuntime;
 use crate::error::BrowserError;
 use crate::memory::MemoryProbe;
 use crate::session::SessionStore;
-use crate::tiers::Tier1Http;
 
 /// `AppState` is the shared state passed to every MCP tool handler. It holds
 /// the immutable config plus a couple of `Arc`s for things that need to be
-/// shared (the session store) or per-session (the tier1 client factory).
+/// shared (the session store) or per-session (the Deno runtime).
 pub struct AppState {
     pub config: Arc<Config>,
     pub sessions: Arc<SessionStore>,
@@ -19,6 +20,10 @@ pub struct AppState {
     /// requires `&mut self` to refresh; the lock is held only for the
     /// microsecond duration of a sample.
     pub memory: Arc<Mutex<MemoryProbe>>,
+    /// Deno runtime for page rendering.
+    pub deno: Arc<DenoRuntime>,
+    /// Deno renderer facade (pool + cookie round-trip + host allowlist).
+    pub renderer: Arc<DenoRenderer>,
 }
 
 impl AppState {
@@ -29,28 +34,35 @@ impl AppState {
 
         let security = Arc::new(SecurityPolicy::from(&config.security));
         let memory = Arc::new(Mutex::new(MemoryProbe::new()));
+        let rt = Arc::new(DenoRuntime::new(Arc::new(config.deno.clone())));
+        let renderer = DenoRenderer::new(rt.clone(), security.clone(), config.http.clone())?;
         Ok(Self {
             config: Arc::new(config),
             sessions,
             security,
             memory,
+            deno: rt,
+            renderer: Arc::new(renderer),
         })
     }
 
-    /// Build a `Tier1Http` for a brand-new session. The session is responsible
-    /// for keeping its cookie jar in sync with the client's `cookie_provider`.
-    pub fn build_tier1(&self, cookies: std::sync::Arc<reqwest::cookie::Jar>) -> Tier1Http {
-        Tier1Http::new(cookies, self.config.http.clone())
+    /// Returns the Deno runtime.
+    pub fn deno(&self) -> Result<Arc<DenoRuntime>, BrowserError> {
+        Ok(self.deno.clone())
     }
 
-    /// PIDs of any tier subprocesses we want included in `MemoryProbe::sample`.
-    /// Phase 1 always returns an empty vec; Phase 3 (Deno) will plumb the
-    /// pool's child PIDs through here.
+    /// Returns the Deno renderer.
+    pub fn renderer(&self) -> Result<Arc<DenoRenderer>, BrowserError> {
+        Ok(self.renderer.clone())
+    }
+
+    /// PIDs of any Deno subprocesses we want included in `MemoryProbe::sample`.
     pub fn child_pids(&self) -> Vec<u32> {
         Vec::new()
     }
 }
 
+#[derive(Debug)]
 pub struct SecurityPolicy {
     pub allowed_hosts: Vec<HostPattern>,
     pub block_third_party_cookies: bool,

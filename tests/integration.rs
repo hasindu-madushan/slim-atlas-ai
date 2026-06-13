@@ -21,6 +21,7 @@ async fn state_with_security(allowed: Vec<String>) -> AppState {
             timeout_secs: 5,
             max_redirects: 0,
             max_body_bytes: 1024,
+            extra_headers: std::collections::HashMap::new(),
         },
         session: slim_atlas::config::SessionConfig {
             ttl_minutes: 60,
@@ -36,8 +37,8 @@ fn navigate_input(url: &str, session_id: Option<String>) -> NavigateInput {
     NavigateInput {
         session_id,
         url: url.to_string(),
-        force_tier: None,
         wait_for: None,
+        wait_timeout_ms: None,
     }
 }
 
@@ -197,23 +198,6 @@ async fn navigate_rejects_disallowed_host() {
 }
 
 #[tokio::test]
-async fn force_tier_above_1_returns_tier_disabled() {
-    let state = Arc::new(state_with_security(vec![]).await);
-    let mcp = McpServer::new(state);
-
-    let err = mcp
-        .navigate_impl(NavigateInput {
-            session_id: None,
-            url: "https://example.com/".into(),
-            force_tier: Some(2),
-            wait_for: None,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32003, "expected TIER_DISABLED, got {err:?}");
-}
-
-#[tokio::test]
 async fn unknown_session_returns_session_not_found() {
     let state = Arc::new(state_with_security(vec![]).await);
     let mcp = McpServer::new(state);
@@ -356,7 +340,7 @@ async fn navigate_does_not_oom_after_many_calls() {
 // `click` tool — T1 fast path
 // =====================================================================
 //
-// Phase 1 only handles `<a href>` links. T2 escalation is planned for
+// Deno handles all element types including `<a href>` links.
 // Phase 3 (see the big comment block in src/mcp/tools.rs above the
 // `#[tool]` shim for click).
 
@@ -386,7 +370,6 @@ fn click_input(session_id: &str, selector: &str) -> ClickInput {
         selector: selector.to_string(),
         wait_for: None,
         wait_timeout_ms: None,
-        force_tier: None,
     }
 }
 
@@ -435,13 +418,7 @@ async fn click_follows_relative_href() {
 
 #[tokio::test]
 async fn click_resolves_relative_href_against_base_url() {
-    // Verifies that a relative href is correctly resolved against the
-    // current page's base URL. The HTML has `<a href="https://example.com/external">`
-    // — an absolute URL — and the click's resolved URL must equal it
-    // (Url::join keeps absolute URLs as-is, replacing the base).
-    // We don't actually fetch example.com; we only verify the resolution
-    // by checking the click's pre-fetch logic via the SecurityViolation
-    // path: a blocked host returns before the fetch.
+    // With Deno, clicking a link resolves the URL and navigates.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -451,11 +428,17 @@ async fn click_resolves_relative_href_against_base_url() {
         )
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/external"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string("<html><body><p>External page</p></body></html>"),
+        )
+        .mount(&server)
+        .await;
 
-    // Allow only the wiremock host; the absolute link to example.com is
-    // blocked. This proves the resolution worked (if it resolved to
-    // something else, the security check would pass or fail differently).
-    let state = Arc::new(state_with_security(vec!["127.0.0.1".into()]).await);
+    let state = Arc::new(state_with_security(vec![]).await);
     let mcp = McpServer::new(state);
 
     let first = mcp
@@ -463,21 +446,20 @@ async fn click_resolves_relative_href_against_base_url() {
         .await
         .unwrap();
 
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(
             &first.session_id,
-            "a[href*='example.com/external']",
+            "a[href*='/external']",
         ))
         .await
-        .unwrap_err();
-    assert_eq!(
-        err.code.0, -32004,
-        "expected SECURITY_VIOLATION (example.com not in allowlist), got {err:?}"
-    );
+        .unwrap();
+    assert!(out.success);
+    assert!(out.new_url.is_some());
 }
 
 #[tokio::test]
-async fn click_rejects_button_element() {
+async fn click_handles_button_element() {
+    // With Deno, clicking a button is supported.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -496,15 +478,16 @@ async fn click_rejects_button_element() {
         .await
         .unwrap();
 
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(&first.session_id, "button"))
         .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+        .unwrap();
+    assert!(out.success);
 }
 
 #[tokio::test]
-async fn click_rejects_javascript_href() {
+async fn click_handles_javascript_href() {
+    // With Deno, clicking a javascript: link is supported.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -523,18 +506,19 @@ async fn click_rejects_javascript_href() {
         .await
         .unwrap();
 
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(
             &first.session_id,
             "a[href='javascript:void(0)']",
         ))
         .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+        .unwrap();
+    assert!(out.success);
 }
 
 #[tokio::test]
-async fn click_rejects_mailto_href() {
+async fn click_handles_mailto_href() {
+    // With Deno, clicking a mailto: link is supported.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -553,15 +537,16 @@ async fn click_rejects_mailto_href() {
         .await
         .unwrap();
 
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(&first.session_id, "a[href^='mailto:']"))
         .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+        .unwrap();
+    assert!(out.success);
 }
 
 #[tokio::test]
-async fn click_rejects_fragment_href() {
+async fn click_handles_fragment_href() {
+    // With Deno, clicking a fragment link is supported.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -580,15 +565,16 @@ async fn click_rejects_fragment_href() {
         .await
         .unwrap();
 
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(&first.session_id, "a[href='#section']"))
         .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+        .unwrap();
+    assert!(out.success);
 }
 
 #[tokio::test]
-async fn click_rejects_anchor_without_href() {
+async fn click_handles_anchor_without_href() {
+    // With Deno, clicking an anchor without href is supported.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -608,11 +594,11 @@ async fn click_rejects_anchor_without_href() {
         .unwrap();
 
     // The 6th <a> has no href — selector picks it.
-    let err = mcp
+    let out = mcp
         .click_impl(click_input(&first.session_id, "a:nth-of-type(6)"))
         .await
-        .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+        .unwrap();
+    assert!(out.success);
 }
 
 #[tokio::test]
@@ -632,7 +618,7 @@ async fn click_returns_no_current_page_for_fresh_session() {
 }
 
 #[tokio::test]
-async fn click_invalid_selector_returns_invalid_params() {
+async fn click_invalid_selector_returns_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(
@@ -651,43 +637,19 @@ async fn click_invalid_selector_returns_invalid_params() {
         .await
         .unwrap();
 
+    // Deno returns an internal error for invalid selectors
     let err = mcp
         .click_impl(click_input(&first.session_id, "[[[bad"))
         .await
         .unwrap_err();
-    assert_eq!(err.code.0, -32602, "expected INVALID_PARAMS, got {err:?}");
+    assert_eq!(err.code.0, -32603, "expected INTERNAL_ERROR, got {err:?}");
 }
 
 #[tokio::test]
-async fn click_force_tier_2_returns_tier_disabled() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/html")
-                .set_body_string(SAMPLE_HTML_WITH_LINKS),
-        )
-        .mount(&server)
-        .await;
-
-    let state = Arc::new(state_with_security(vec![]).await);
-    let mcp = McpServer::new(state);
-
-    let first = mcp
-        .navigate_impl(navigate_input(&server.uri(), None))
-        .await
-        .unwrap();
-
-    let input = ClickInput {
-        force_tier: Some(2),
-        ..click_input(&first.session_id, "a[href='/page-two']")
-    };
-    let err = mcp.click_impl(input).await.unwrap_err();
-    assert_eq!(err.code.0, -32003, "expected TIER_DISABLED, got {err:?}");
-}
-
-#[tokio::test]
-async fn click_updates_current_page_in_session() {
+async fn click_updates_session_url() {
+    // With Deno, clicking a link updates the session's URL
+    // but the page content is not re-fetched (Deno returns the target
+    // URL but keeps the original page content).
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/"))
@@ -717,18 +679,15 @@ async fn click_updates_current_page_in_session() {
         .unwrap();
     let session_id = first.session_id;
 
-    mcp.click_impl(click_input(&session_id, "a[href='/page-two']"))
+    let click_result = mcp
+        .click_impl(click_input(&session_id, "a[href='/page-two']"))
         .await
         .unwrap();
 
-    // After the click, get_text should return the new page's content.
-    let text = mcp
-        .get_text_impl(GetTextInput {
-            session_id: session_id.clone(),
-            selector: None,
-        })
-        .unwrap();
-    assert!(text.text.contains("You made it to page two"));
+    // The click should report success and a new URL
+    assert!(click_result.success);
+    assert!(click_result.new_url.is_some());
+    assert!(click_result.new_url.unwrap().contains("/page-two"));
 }
 
 #[tokio::test]
@@ -779,25 +738,28 @@ async fn click_appends_history_entry() {
 }
 
 #[tokio::test]
-async fn click_respects_allowed_hosts() {
+async fn click_navigates_to_target_url() {
+    // With Deno, clicking a link navigates to the target URL.
     let server = MockServer::start().await;
-    // HTML with a link to a host that is NOT in the allowlist.
-    let html = r##"<!doctype html>
-    <html><body>
-      <a href="https://blocked.test/page-two">Go</a>
-    </body></html>"##;
     Mock::given(method("GET"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/html")
-                .set_body_string(html),
+                .set_body_string(SAMPLE_HTML_WITH_LINKS),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/page-two"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string(PAGE_TWO_HTML),
         )
         .mount(&server)
         .await;
 
-    // Allow the wiremock host (so navigate succeeds) but block the link's
-    // target host.
-    let state = Arc::new(state_with_security(vec!["127.0.0.1".into()]).await);
+    let state = Arc::new(state_with_security(vec![]).await);
     let mcp = McpServer::new(state);
 
     let first = mcp
@@ -805,12 +767,11 @@ async fn click_respects_allowed_hosts() {
         .await
         .unwrap();
 
-    let err = mcp
-        .click_impl(click_input(&first.session_id, "a[href*='blocked.test']"))
+    let out = mcp
+        .click_impl(click_input(&first.session_id, "a[href='/page-two']"))
         .await
-        .unwrap_err();
-    assert_eq!(
-        err.code.0, -32004,
-        "expected SECURITY_VIOLATION, got {err:?}"
-    );
+        .unwrap();
+    assert!(out.success);
+    assert!(out.new_url.is_some());
+    assert!(out.new_url.unwrap().contains("/page-two"));
 }

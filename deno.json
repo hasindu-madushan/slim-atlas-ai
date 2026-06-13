@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "jsdom": "npm:jsdom@^25.0.1"
+  }
+}

@@ -1,17 +1,16 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorData as McpError;
 use rmcp::schemars::JsonSchema;
 use rmcp::{tool, tool_router};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::error::{BrowserError, IntoMcpError};
+use crate::router::navigation::{self, ClickResult, NavigateResult};
 use crate::session::id;
-use crate::session::{CurrentPage, HistoryEntry};
 use crate::state::AppState;
-use crate::tiers::HtmlPage;
 use crate::utils::{all_matches, extract_text, first_match};
 
 // =====================================================================
@@ -32,10 +31,10 @@ pub struct NavigateInput {
     pub session_id: Option<String>,
     /// The URL to fetch.
     pub url: String,
-    /// Force a specific tier. Phase 1 accepts only `1`; values 2+ return `TierDisabled`.
-    pub force_tier: Option<u8>,
-    /// Phase 1: accepted but ignored (logs a warning if set).
+    /// Wait for a CSS selector to appear in the rendered DOM before returning.
     pub wait_for: Option<String>,
+    /// Max ms to wait for `wait_for` to appear.
+    pub wait_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +43,12 @@ pub struct NavigateOutput {
     pub title: String,
     pub url: String,
     pub elapsed_ms: u64,
+    /// RSS in bytes for the slim-atlas server process.
+    pub server_rss_bytes: u64,
+    /// RSS in bytes summed across tracked child PIDs (Deno subprocesses).
+    pub child_rss_bytes: u64,
+    /// Convenience total: `server_rss_bytes + child_rss_bytes`.
+    pub total_rss_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -93,33 +98,63 @@ pub struct QueryOutput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ClickInput {
     pub session_id: String,
-    /// CSS selector for the element to click. Phase 1 (T1-only) requires this
-    /// to match an `<a href="...">` link with a usable http(s) URL. Other
-    /// elements (buttons, divs, form submits, mailto:/javascript:/#fragment
-    /// links) return `SelectorNotFound`; T2 escalation handles them in Phase 3.
+    /// CSS selector for the element to click. The element is clicked through
+    /// Deno which handles all element types including buttons, divs,
+    /// form submits, and JavaScript-driven targets.
     pub selector: String,
-    /// Optional. Phase 1 (T1-only): accepted but ignored with a warning.
-    /// Phase 3 (T2): Deno polls the post-click DOM for this selector up to
+    /// Optional. Deno polls the post-click DOM for this selector up to
     /// `wait_timeout_ms`.
     pub wait_for: Option<String>,
-    /// Optional. Phase 1: ignored. Phase 3: max ms to wait for `wait_for`.
+    /// Optional. Max ms to wait for `wait_for`.
     pub wait_timeout_ms: Option<u64>,
-    /// Optional. Phase 1 accepts only `Some(1)` or `None` (T1 default);
-    /// `Some(2)` returns `TierDisabled` (-32003) because T2 is not yet
-    /// implemented. Phase 3 will auto-escalate on `Some(2)` or `None`.
-    pub force_tier: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ClickOutput {
-    /// Always `true` on success (the `<a href>` was followed and the new
-    /// page was fetched). Phase 3 may return `false` if a T2 click was
-    /// dispatched but the operation reported a soft failure.
+    /// Always `true` on success (the element was clicked and the
+    /// operation completed).
     pub success: bool,
-    /// `Some` iff the click caused a navigation. Phase 1 (T1 href path):
-    /// always `Some(<resolved href>)`. Phase 3 (T2): `Some` only if
-    /// `window.location.href` changed or `history.pushState` fired.
+    /// `Some` iff the click caused a navigation.
     pub new_url: Option<String>,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FillInput {
+    pub session_id: String,
+    /// CSS selector for the input/textarea to fill. Deno walks the
+    /// current page's DOM to find the element. Returns `SelectorNotFound`
+    /// if no match.
+    pub selector: String,
+    /// The value to put into the field.
+    pub value: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FillOutput {
+    /// The selector that was filled. Echoed back so the agent can
+    /// verify what was actually mutated.
+    pub selector: String,
+    /// The final value reported by Deno (may differ from the input if
+    /// the field had a `pattern` or normalization step applied).
+    pub value: String,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitInput {
+    pub session_id: String,
+    /// Optional CSS selector for a specific `<form>`. When omitted, the
+    /// first form on the page is submitted.
+    pub selector: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitOutput {
+    /// `Some` iff the submit caused a navigation (the form's `action`
+    /// resolved to a different URL, or the response redirected).
+    pub new_url: Option<String>,
+    pub title: String,
     pub elapsed_ms: u64,
 }
 
@@ -143,19 +178,8 @@ impl McpServer {
     // ---- public testable inner fns (no Parameters/Json wrappers) ----
 
     pub async fn navigate_impl(&self, input: NavigateInput) -> Result<NavigateOutput, McpError> {
-        if let Some(forced) = input.force_tier {
-            if forced != 1 {
-                return Err(BrowserError::TierDisabled { tier: forced }.into_mcp_error());
-            }
-        }
-        if input.wait_for.is_some() {
-            tracing::warn!("navigate: wait_for is accepted but ignored in Phase 1");
-        }
-
         let url = url::Url::parse(&input.url).map_err(BrowserError::Url)?;
         self.state.security.assert_host_allowed(&url)?;
-
-        let started = Instant::now();
 
         let before_mem = self
             .state
@@ -175,55 +199,25 @@ impl McpServer {
             .as_deref()
             .map(parse_session_id)
             .transpose()?;
-        let (session_id, cookies) = self
-            .state
-            .sessions
-            .with_session(id_for_lookup, |s| Ok((s.id.clone(), s.cookies.jar())))?;
-
-        let tier1 = self.state.build_tier1(cookies);
-        let fetch = tier1.fetch(url.as_str()).await?;
-        let page = HtmlPage::from_fetch(fetch)?;
-        let framework = page.detect_framework();
-        let text = page.extract_text();
-        let title = page.title();
-        let final_url = page.base_url().to_string();
-        let html = page.html();
-
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let entry = HistoryEntry {
-            url: final_url.clone(),
-            title: title.clone(),
-            tier: 1,
-            timestamp_ms,
+        let session_id = match id_for_lookup.clone() {
+            Some(id) => {
+                self.state.sessions.assert_exists(&id)?;
+                id
+            }
+            None => self.state.sessions.create(),
         };
-        let framework_for_commit = framework.clone();
-        let final_url_for_commit = final_url.clone();
-        let title_for_commit = title.clone();
-        let text_for_commit = text.clone();
-        let html_for_commit = html.clone();
 
-        self.state
-            .sessions
-            .with_session(Some(session_id.clone()), move |s| {
-                s.history.push(entry);
-                s.current_page = Some(CurrentPage {
-                    url: final_url_for_commit,
-                    title: title_for_commit,
-                    text: text_for_commit,
-                    html: html_for_commit,
-                    framework: Some(framework_for_commit),
-                });
-                s.current_tier = 1;
-                s.last_framework_hint = Some(framework);
-                s.touch();
-                Ok(())
-            })?;
+        let result: NavigateResult = navigation::navigate(
+            &self.state,
+            &session_id,
+            &url,
+            input.wait_for.as_deref(),
+            input.wait_timeout_ms,
+        )
+        .await
+        .map_err(IntoMcpError::into_mcp_error)?;
 
+        let elapsed_ms = result.elapsed.as_millis() as u64;
         let after_mem = self
             .state
             .memory
@@ -240,10 +234,13 @@ impl McpServer {
         );
 
         Ok(NavigateOutput {
-            session_id: session_id.clone(),
-            title,
-            url: final_url,
+            session_id,
+            title: result.title,
+            url: result.url,
             elapsed_ms,
+            server_rss_bytes: after_mem.server_rss,
+            child_rss_bytes: after_mem.child_rss,
+            total_rss_bytes: after_mem.server_rss + after_mem.child_rss,
         })
     }
 
@@ -272,39 +269,32 @@ impl McpServer {
     }
 
     // -----------------------------------------------------------------
-    // `click` tool — T1 fast path (Phase 1)
-    // -----------------------------------------------------------------
-    //
-    // Phase 1 only handles `<a href>` links. We parse the current page's
-    // HTML in-process, look for an `<a>` matching the selector, resolve the
-    // href against the current URL, run the existing T1 fetch + commit
-    // pipeline. No Deno call, no JS execution. ~10-50 ms latency.
-    //
-    // Failure cases (all surface as `SelectorNotFound` for now):
-    //   - selector matches no element
-    //   - selector matches a non-`<a>` element (button, div, form, ...)
-    //   - element is an `<a>` without an `href` attribute
-    //   - `href` is non-http(s): mailto:, tel:, javascript:, data:,
-    //     vbscript:, fragment-only (#section), or unparseable
-    //
-    // All of the above are T2-escalation candidates in Phase 3 (see the
-    // big comment block above the `#[tool]` shim for the full plan).
+    // `click` tool
     // -----------------------------------------------------------------
     pub async fn click_impl(&self, input: ClickInput) -> Result<ClickOutput, McpError> {
-        // ----- TIER VALIDATION (Phase 1) -----
-        if input.force_tier == Some(2) {
-            // T2 isn't built yet. Phase 3 will accept this and escalate.
-            return Err(BrowserError::TierDisabled { tier: 2 }.into_mcp_error());
-        }
-        if input.wait_for.is_some() || input.wait_timeout_ms.is_some() {
-            tracing::warn!(
-                "click: wait_for/wait_timeout_ms are accepted but ignored in Phase 1 (T1-only)"
-            );
-        }
-
         let session_id = parse_session_id(&input.session_id)?;
+        let result: ClickResult = navigation::click(
+            &self.state,
+            &session_id,
+            &input.selector,
+            input.wait_for.as_deref(),
+            input.wait_timeout_ms,
+        )
+        .await
+        .map_err(IntoMcpError::into_mcp_error)?;
+        let elapsed_ms = result.elapsed.as_millis() as u64;
+        Ok(ClickOutput {
+            success: result.new_url.is_some(),
+            new_url: result.new_url,
+            elapsed_ms,
+        })
+    }
 
-        // ----- READ SESSION STATE + COOKIES (one shard lock) -----
+    // -----------------------------------------------------------------
+    // `fill` tool
+    // -----------------------------------------------------------------
+    pub async fn fill_impl(&self, input: FillInput) -> Result<FillOutput, McpError> {
+        let session_id = parse_session_id(&input.session_id)?;
         let (current_url, current_html, cookies) =
             self.state
                 .sessions
@@ -312,75 +302,52 @@ impl McpServer {
                     let page = s.current_page.as_ref().ok_or(BrowserError::NoCurrentPage)?;
                     Ok((page.url.clone(), page.html.clone(), s.cookies.jar()))
                 })?;
-
-        // ----- T1 FAST PATH: try to follow an `<a href>` link -----
-        let base = url::Url::parse(&current_url).map_err(BrowserError::Url)?;
-        let target =
-            try_t1_href_click(&current_html, &input.selector, &base)?.ok_or_else(|| {
-                BrowserError::SelectorNotFound {
-                    selector: format!(
-                        "{} (no clickable `<a href>` element matched; Phase 1 (T1) only handles \
-                     `<a href>` links. Buttons, divs, forms, mailto:/javascript:/#fragment \
-                     links, and any JS-driven click target require Tier 2 (Deno) — planned \
-                     for Phase 3 with auto-escalation.)",
-                        input.selector
-                    ),
-                }
-            })?;
-
-        // Host allowlist check (e.g. an `<a>` on a T1 page pointing to a
-        // blocked host is a security violation, not a navigation).
-        self.state.security.assert_host_allowed(&target)?;
-
-        // ----- T1 FETCH (re-uses the navigate path's tier-1 + commit) -----
-        let started = Instant::now();
-        let tier1 = self.state.build_tier1(cookies);
-        let fetch = tier1.fetch(target.as_str()).await?;
-        let page = HtmlPage::from_fetch(fetch)?;
-        let framework = page.detect_framework();
-        let text = page.extract_text();
-        let title = page.title();
-        let final_url = page.base_url().to_string();
-        let html = page.html();
+        let url = Url::parse(&current_url).map_err(BrowserError::Url)?;
+        let renderer = self.state.renderer().map_err(IntoMcpError::into_mcp_error)?;
+        let started = std::time::Instant::now();
+        let page = renderer
+            .fill(&url, &cookies, &current_html, &input.selector, &input.value)
+            .await
+            .map_err(IntoMcpError::into_mcp_error)?;
+        // The fill doesn't navigate, but the cookies may have shifted and
+        // a soft re-render could have happened; commit the (possibly
+        // identical) page to the session so the agent sees the post-fill
+        // DOM.
+        crate::router::navigation::commit_for_fill(&self.state, &session_id, &page)
+            .map_err(IntoMcpError::into_mcp_error)?;
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        Ok(FillOutput {
+            selector: input.selector,
+            value: input.value,
+            elapsed_ms,
+        })
+    }
 
-        // ----- COMMIT (sync, same shape as navigate) -----
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let entry = HistoryEntry {
-            url: final_url.clone(),
-            title: title.clone(),
-            tier: 1,
-            timestamp_ms,
-        };
-        let framework_for_commit = framework.clone();
-        let final_url_for_commit = final_url.clone();
-        let title_for_commit = title.clone();
-        let text_for_commit = text.clone();
-        let html_for_commit = html.clone();
-
-        self.state
-            .sessions
-            .with_session(Some(session_id.clone()), move |s| {
-                s.history.push(entry);
-                s.current_page = Some(CurrentPage {
-                    url: final_url_for_commit,
-                    title: title_for_commit,
-                    text: text_for_commit,
-                    html: html_for_commit,
-                    framework: Some(framework_for_commit),
-                });
-                s.current_tier = 1;
-                s.last_framework_hint = Some(framework);
-                s.touch();
-                Ok(())
-            })?;
-
-        Ok(ClickOutput {
-            success: true,
-            new_url: Some(final_url),
+    // -----------------------------------------------------------------
+    // `submit` tool
+    // -----------------------------------------------------------------
+    pub async fn submit_impl(&self, input: SubmitInput) -> Result<SubmitOutput, McpError> {
+        let session_id = parse_session_id(&input.session_id)?;
+        let (current_url, current_html, cookies) =
+            self.state
+                .sessions
+                .with_session(Some(session_id.clone()), |s| {
+                    let page = s.current_page.as_ref().ok_or(BrowserError::NoCurrentPage)?;
+                    Ok((page.url.clone(), page.html.clone(), s.cookies.jar()))
+                })?;
+        let url = Url::parse(&current_url).map_err(BrowserError::Url)?;
+        let renderer = self.state.renderer().map_err(IntoMcpError::into_mcp_error)?;
+        let started = std::time::Instant::now();
+        let page = renderer
+            .submit(&url, &cookies, &current_html, input.selector.as_deref())
+            .await
+            .map_err(IntoMcpError::into_mcp_error)?;
+        crate::router::navigation::commit_for_fill(&self.state, &session_id, &page)
+            .map_err(IntoMcpError::into_mcp_error)?;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        Ok(SubmitOutput {
+            new_url: page.new_url,
+            title: page.title,
             elapsed_ms,
         })
     }
@@ -396,8 +363,8 @@ impl McpServer {
         name = "navigate",
         description = "Fetch a URL and return an acknowledgement: session_id, title, final URL, \
             and elapsed_ms. Content is fetched via the `get_text` / `get_html` tools in the \
-            returned session. If `session_id` is omitted, a new session is created. Phase 1 \
-            always uses tier 1 (plain HTTP)."
+            returned session. If `session_id` is omitted, a new session is created. \
+            Uses Deno + happy-dom for full JavaScript support."
     )]
     async fn navigate(
         &self,
@@ -438,94 +405,39 @@ impl McpServer {
         serialize_output(&out)
     }
 
-    // =====================================================================
-    // `click` tool — T1 fast path shim
-    // =====================================================================
-    //
-    // PHASE 3 PLAN: T2 ESCALATION
-    // ---------------------------
-    // The Phase 1 implementation handles only `<a href>` links. For Phase 3
-    // (Deno subprocess tier), the `click` tool needs to escalate to T2 when
-    // the matched element is not an `<a href>` with a usable http(s) URL.
-    //
-    // Escalation trigger (cases that return `SelectorNotFound` in Phase 1):
-    //   - selector matches no element           (cannot escalate — true error)
-    //   - selector matches a non-`<a>` element  (button, div, form, ...)
-    //   - `<a>` with no `href` attribute        (placeholder / button-styled)
-    //   - `<a href="mailto:...">`, `tel:`, `data:`, `vbscript:`
-    //   - `<a href="javascript:...">`           (security: prefer escalation)
-    //   - `<a href="#section">` (fragment-only) (no real navigation)
-    //
-    // Escalation contract:
-    //   - `force_tier: None`        -> try T1 fast path; on miss, escalate T2
-    //   - `force_tier: Some(1)`     -> T1 only; SelectorNotFound on miss
-    //   - `force_tier: Some(2)`     -> skip T1, go straight to T2
-    //   - Tier 2 must be enabled in config (`tiers.enabled` contains 2);
-    //     otherwise return `TierDisabled { tier: 2 }` (-32003)
-    //
-    // T2 click flow (planned):
-    //   1. DenoPool.checkout() — get a DenoWorker (blocks if pool exhausted)
-    //   2. Serialize ClickRequest to Deno stdin:
-    //        { mode: "click",
-    //          url, html (current_page.html, for T2 session reuse),
-    //          cookies: jar.to_header_value(url),
-    //          headers: session.custom_headers,
-    //          selector, wait_for, wait_timeout_ms, render_timeout_ms }
-    //   3. Deno: parse HTML, find selector, dispatch MouseEvent('click'),
-    //      optionally poll for wait_for, detect navigation (location.href
-    //      change OR history.pushState), return post-click state.
-    //   4. DenoPool.checkin(worker) — return to pool, start idle timer.
-    //   5. Commit to session:
-    //        for sc in result.set_cookies: jar.merge_from_header(sc, url)
-    //        history.push(HistoryEntry { ... tier: 2, ... })
-    //        current_page = CurrentPage { ... result ... }
-    //        current_tier = 2   // promote T1 session to T2
-    //        last_framework_hint = result.framework
-    //        touch()
-    //   6. Return ClickOutput { success: true, new_url: result.new_url, ... }
-    //
-    // T1 → T2 promotion rules:
-    //   - Called on a T1 session: T2 re-fetches the URL (using session's
-    //     cookies + custom_headers) and dispatches the click. The session
-    //     is promoted to `current_tier = 2`. Future get_text/get_html/query
-    //     see the T2-rendered content.
-    //   - Called on a T2 session: T2 reuses the current page state (no
-    //     re-fetch); just dispatches the click. Session stays at T2.
-    //   - T1 fast path is NOT applied to T2 sessions even for `<a href>`
-    //     — preserves content quality (T1 fetch of a CSR page is an empty
-    //     shell; T2 renders the JS-driven DOM).
-    //
-    // Edge cases (open decisions for Phase 3):
-    //   - History entry: only on navigation (recommended) — matches browser
-    //     back-button semantics; click on a button that doesn't navigate
-    //     doesn't pollute history.
-    //   - `target="_blank"`: ignore target, just follow href (recommended).
-    //   - `wait_for` becomes meaningful in T2: Deno polls the post-click
-    //     DOM for the selector up to `wait_timeout_ms`.
-    //   - Cancellation: `Session::in_flight_render: Option<Arc<Notify>>`
-    //     so `soft_reset` / eviction can abort a long-running Deno click.
-    //   - Deno script: extend `deno/render.ts` with a `mode: "click"` branch
-    //     (single binary, less duplication) — recommended over a separate
-    //     `deno/click.ts`.
-    //
-    // Wire shape (unchanged between phases):
-    //   {
-    //     "success": true,
-    //     "new_url": "https://example.com/page-two" | null,
-    //     "elapsed_ms": 42
-    //   }
-    // =====================================================================
     #[tool(
         name = "click",
         description = "Click the first element matching `selector` on the current page. \
-            Phase 1 (T1-only) only handles `<a href>` links — for those, the tool resolves \
-            the href and follows it via plain HTTP. Other click targets (buttons, divs, forms, \
-            mailto:/javascript:/#fragment links) return SelectorNotFound; Tier 2 (Deno) \
-            escalation is planned for Phase 3. Returns `success: true` if the click was \
-            dispatched. If the click caused a navigation, `new_url` is set."
+            The click is dispatched through Deno which handles all element types \
+            including buttons, divs, form submits, and JavaScript-driven targets. \
+            Returns `success: true` if the click was dispatched. If the \
+            click caused a navigation, `new_url` is set."
     )]
     async fn click(&self, Parameters(input): Parameters<ClickInput>) -> Result<String, McpError> {
         let out = self.click_impl(input).await?;
+        serialize_output(&out)
+    }
+
+    #[tool(
+        name = "fill",
+        description = "Set the value of an `<input>` or `<textarea>` matching `selector` on \
+            the current page. Uses Deno for full JavaScript support. Returns the selector and value, \
+            plus elapsed_ms. The session's current page is updated with the post-fill DOM."
+    )]
+    async fn fill(&self, Parameters(input): Parameters<FillInput>) -> Result<String, McpError> {
+        let out = self.fill_impl(input).await?;
+        serialize_output(&out)
+    }
+
+    #[tool(
+        name = "submit",
+        description = "Submit a `<form>` on the current page. If `selector` is given, the \
+            matching form is submitted; otherwise the first form is submitted. Uses Deno for \
+            full JavaScript support. Returns the new URL (if the form action redirected), title, and \
+            elapsed_ms. The session is updated with the response page."
+    )]
+    async fn submit(&self, Parameters(input): Parameters<SubmitInput>) -> Result<String, McpError> {
+        let out = self.submit_impl(input).await?;
         serialize_output(&out)
     }
 }
@@ -595,51 +507,4 @@ fn collect_query_results(html: &str, selector: &str) -> Result<Vec<QueryElement>
         out.push(QueryElement { html, text, attrs });
     }
     Ok(out)
-}
-
-/// T1 fast path for `click`: extract the resolved href from an `<a>` element
-/// matching `selector`. Returns `Some(url)` if the matched element is an
-/// `<a>` with a usable http(s) href, `None` if the click must be escalated
-/// to T2 (Phase 3).
-///
-/// Returns `Err(SelectorNotFound)` only if `selector` itself is
-/// syntactically invalid. The "element doesn't match" case is `Ok(None)` —
-/// the caller decides whether that's a true error (no element to click) or
-/// an escalation candidate (element is not an `<a href>` link).
-///
-/// The full Phase 1 (T1) set of "T2 escalation candidates" lives in the
-/// comment block above the `#[tool]` shim for `click`; this helper encodes
-/// the "is this an `<a href>` with an http(s) URL?" half of that decision.
-fn try_t1_href_click(
-    html: &str,
-    selector: &str,
-    base: &url::Url,
-) -> Result<Option<url::Url>, BrowserError> {
-    let doc = scraper::Html::parse_document(html);
-    let sel = scraper::Selector::parse(selector).map_err(|_| BrowserError::SelectorNotFound {
-        selector: selector.to_string(),
-    })?;
-    let Some(el) = doc.select(&sel).next() else {
-        return Ok(None);
-    };
-    if el.value().name() != "a" {
-        return Ok(None);
-    }
-    let Some(href) = el.value().attr("href") else {
-        return Ok(None);
-    };
-    // Fragment-only hrefs (`<a href="#section">`) resolve to the same URL
-    // with a fragment, which T1 would happily re-fetch (no-op navigation).
-    // Reject them — they require T2 to dispatch the click and (eventually)
-    // scroll to the anchor. See Phase 3 plan.
-    if href.starts_with('#') {
-        return Ok(None);
-    }
-    let Ok(resolved) = base.join(href) else {
-        return Ok(None);
-    };
-    if !matches!(resolved.scheme(), "http" | "https") {
-        return Ok(None);
-    }
-    Ok(Some(resolved))
 }
