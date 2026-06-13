@@ -41,6 +41,7 @@ export class PuppeteerMCPServer {
   private server: Server;
   private sessionManager: SessionManager;
   private sessionQueues: Map<string, Promise<void>> = new Map();
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.server = new Server(
@@ -49,6 +50,7 @@ export class PuppeteerMCPServer {
     );
     this.sessionManager = new SessionManager();
     this.setupHandlers();
+    this.startCleanupJob();
     log.info('server', `Initialized. Log file: ${log.getPath()}`);
   }
 
@@ -270,6 +272,7 @@ export class PuppeteerMCPServer {
     try {
       const result = await this.executeWithManager(sessionId, manager, toolName, args);
       log.info(sessionId, `${toolName} completed`);
+      this.sessionManager.touchSession(sessionId);
       return result;
     } catch (error: any) {
       if (CHROME_ENABLED && isCrashError(error) && this.sessionManager.getBrowserType(sessionId) === 'lightpanda') {
@@ -278,6 +281,7 @@ export class PuppeteerMCPServer {
         manager = await this.sessionManager.acquire(sessionId, true);
         const result = await this.executeWithManager(sessionId, manager, toolName, args);
         log.info(sessionId, `${toolName} completed (after Chrome fallback)`);
+        this.sessionManager.touchSession(sessionId);
         return result;
       }
       log.error(sessionId, `${toolName} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -374,6 +378,42 @@ export class PuppeteerMCPServer {
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);
+    }
+  }
+
+  private startCleanupJob(): void {
+    const intervalMs = parseInt(process.env.CLEANUP_INTERVAL_MS || '600000', 10);
+    const idleTimeoutMs = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || '300000', 10);
+
+    log.info('cleanup', `Starting cleanup job (interval=${intervalMs}ms, idleTimeout=${idleTimeoutMs}ms)`);
+
+    this.cleanupTimer = setInterval(async () => {
+      try {
+        const idleIds = this.sessionManager.getIdleSessionIds(idleTimeoutMs);
+        for (const sessionId of idleIds) {
+          log.info(sessionId, `Session idle >${idleTimeoutMs}ms, releasing`);
+          await this.sessionManager.release(sessionId);
+          this.sessionQueues.delete(sessionId);
+        }
+
+        const activeIds = this.sessionManager.getActiveSessionIds();
+        await this.sessionManager.purgeOrphanedInstances(activeIds);
+
+        if (idleIds.length > 0) {
+          log.info('cleanup', `Cleaned ${idleIds.length} idle session(s)`);
+        }
+      } catch (e) {
+        log.error('cleanup', `Cleanup job error: ${(e as Error).message}`);
+      }
+    }, intervalMs);
+
+    if (this.cleanupTimer.unref) this.cleanupTimer.unref();
+  }
+
+  private stopCleanupJob(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
     }
   }
 

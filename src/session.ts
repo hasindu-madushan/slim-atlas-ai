@@ -15,6 +15,7 @@ interface SessionState {
   lpInstanceId?: string;
   chromeSlotId?: string;
   manager: ChromeManager | null;
+  lastActiveTime: number;
 }
 
 export class SessionManager {
@@ -47,6 +48,7 @@ export class SessionManager {
       preferChrome: preferChrome && CHROME_ENABLED,
       queue: Promise.resolve(),
       manager: null,
+      lastActiveTime: Date.now(),
     };
 
     log.info(sessionId, `New session, browser=${state.browserType}`);
@@ -151,6 +153,44 @@ export class SessionManager {
 
   shouldPreferChrome(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.preferChrome ?? false;
+  }
+
+  touchSession(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) state.lastActiveTime = Date.now();
+  }
+
+  getIdleSessionIds(idleTimeoutMs: number): string[] {
+    const now = Date.now();
+    const idle: string[] = [];
+    for (const [sessionId, state] of this.sessions) {
+      if (now - state.lastActiveTime > idleTimeoutMs) {
+        idle.push(sessionId);
+      }
+    }
+    return idle;
+  }
+
+  getActiveSessionIds(): Set<string> {
+    return new Set(this.sessions.keys());
+  }
+
+  async purgeOrphanedInstances(activeSessionIds: Set<string>): Promise<void> {
+    const activeLpIds = new Set<string>();
+    for (const [sessionId, state] of this.sessions) {
+      if (activeSessionIds.has(sessionId) && state.lpInstanceId) {
+        activeLpIds.add(state.lpInstanceId);
+      }
+    }
+    await this.lpPool.killOrphaned(activeLpIds);
+
+    const activeChromeIds = new Set<string>();
+    for (const [sessionId, state] of this.sessions) {
+      if (activeSessionIds.has(sessionId) && state.chromeSlotId) {
+        activeChromeIds.add(state.chromeSlotId);
+      }
+    }
+    await this.chromePool.killOrphaned(activeChromeIds);
   }
 
   getManager(sessionId: string): ChromeManager | null {

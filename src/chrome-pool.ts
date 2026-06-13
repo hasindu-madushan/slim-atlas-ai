@@ -142,4 +142,15 @@ export class ChromePool {
       browserConnected: this.browser?.connected ?? false,
     };
   }
+
+  async killOrphaned(activeSlotIds: Set<string>): Promise<void> {
+    const toKill = this.available.filter(slot => !activeSlotIds.has(slot.id));
+    this.available = this.available.filter(slot => activeSlotIds.has(slot.id));
+
+    for (const slot of toKill) {
+      log.info('chrome-pool', `Killing orphaned Chrome slot ${slot.id}`);
+      try { await slot.page.close(); } catch (e) {}
+      try { await slot.context.close(); } catch (e) {}
+    }
+  }
 }
