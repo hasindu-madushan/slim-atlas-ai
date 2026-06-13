@@ -97,6 +97,7 @@ export class BrowserTools {
     const selectorMap = await this.page.evaluate(`
       (function() {
         var shouldFlatten = ${JSON.stringify(flattenSingleChild)};
+        if (!document.body) return {};
         function gen(el) {
           if (el.id) return '#' + CSS.escape(el.id);
           var s = el.tagName.toLowerCase();
@@ -162,6 +163,7 @@ export class BrowserTools {
       (function() {
         var id = ${JSON.stringify(nodeId)};
         var shouldFlatten = ${JSON.stringify(shouldFlatten)};
+        if (!document.body) return { type: 'text', text: 'Node with ID ' + id + ' not found' };
         function getText(el) {
           var t = '';
           for (var i = 0; i < el.childNodes.length; i++) { var ch = el.childNodes[i]; if (ch.nodeType === Node.TEXT_NODE) t += ch.textContent; }
@@ -214,6 +216,7 @@ export class BrowserTools {
       (function() {
         var id = ${JSON.stringify(nodeId)};
         var shouldFlatten = ${JSON.stringify(shouldFlatten)};
+        if (!document.body) return null;
         function getText(el) {
           var t = '';
           for (var i = 0; i < el.childNodes.length; i++) { var ch = el.childNodes[i]; if (ch.nodeType === Node.TEXT_NODE) t += ch.textContent; }
