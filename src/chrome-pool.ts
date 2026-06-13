@@ -1,5 +1,6 @@
 import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer';
 import { ChromeManager } from './chrome.js';
+import { log } from './logger.js';
 
 const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
 
@@ -19,6 +20,7 @@ export class ChromePool {
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser && this.browser.connected) return this.browser;
 
+    log.info('chrome-pool', 'Launching Chrome browser');
     this.browser = await puppeteer.launch({
       headless: true as any,
       args: [
@@ -30,6 +32,7 @@ export class ChromePool {
     });
 
     this.browser.on('disconnected', () => {
+      log.warn('chrome-pool', 'Chrome browser disconnected');
       this.browser = null;
       this.available = [];
       this.inUse.clear();
@@ -39,23 +42,30 @@ export class ChromePool {
   }
 
   async acquire(sessionId: string): Promise<ChromeSlot> {
-    if (this.inUse.has(sessionId)) return this.inUse.get(sessionId)!;
+    if (this.inUse.has(sessionId)) {
+      log.debug(sessionId, `Reusing existing Chrome slot`);
+      return this.inUse.get(sessionId)!;
+    }
 
     if (this.available.length > 0) {
       const slot = this.available.pop()!;
+      log.info(sessionId, `Acquired Chrome slot ${slot.id}`);
       this.inUse.set(sessionId, slot);
       return slot;
     }
 
     const total = this.inUse.size + this.available.length;
     if (total < MAX_SIZE) {
+      log.info(sessionId, `Creating new Chrome slot`);
       const slot = await this.createSlot();
       this.inUse.set(sessionId, slot);
       return slot;
     }
 
+    log.warn(sessionId, `All Chrome slots in use, waiting`);
     return new Promise((resolve) => {
       this.waitQueue.push((slot) => {
+        log.info(sessionId, `Got Chrome slot ${slot.id} from wait queue`);
         this.inUse.set(sessionId, slot);
         resolve(slot);
       });
@@ -100,6 +110,7 @@ export class ChromePool {
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     const id = `chrome-ctx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    log.info('chrome-pool', `Created slot ${id}`);
     const manager = new ChromeManager({ browser, context, page });
     return { id, context, page, manager };
   }

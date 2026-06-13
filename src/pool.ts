@@ -3,6 +3,7 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { log } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +44,7 @@ export class LightpandaPool {
 
   async acquire(sessionId: string): Promise<LightpandaInstance> {
     if (this.inUse.has(sessionId)) {
+      log.debug(sessionId, `Reusing existing Lightpanda instance`);
       return this.inUse.get(sessionId)!;
     }
 
@@ -50,9 +52,11 @@ export class LightpandaPool {
       const instance = this.available.pop()!;
       const alive = !instance.process.killed && instance.process.exitCode === null && instance.browser.connected;
       if (alive) {
+        log.info(sessionId, `Acquired Lightpanda instance ${instance.id} (port ${instance.port})`);
         this.inUse.set(sessionId, instance);
         return instance;
       }
+      log.warn(sessionId, `Lightpanda instance ${instance.id} is dead, removing`);
       const idx = this.instances.findIndex(i => i.id === instance.id);
       if (idx >= 0) this.instances.splice(idx, 1);
       try { instance.browser?.disconnect(); } catch (e) {}
@@ -60,14 +64,17 @@ export class LightpandaPool {
     }
 
     if (this.instances.length < MAX_SIZE) {
+      log.info(sessionId, `Spawning new Lightpanda instance (port ${this.nextPort})`);
       const instance = await this.spawnInstance();
       this.instances.push(instance);
       this.inUse.set(sessionId, instance);
       return instance;
     }
 
+    log.warn(sessionId, `All Lightpanda instances in use, waiting`);
     return new Promise((resolve) => {
       this.waitQueue.push((instance) => {
+        log.info(sessionId, `Got Lightpanda instance ${instance.id} from wait queue`);
         this.inUse.set(sessionId, instance);
         resolve(instance);
       });
@@ -122,14 +129,15 @@ export class LightpandaPool {
     await killPort(port);
     await new Promise((r) => setTimeout(r, 200));
 
+    log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
     const proc = spawn(lightpandaPath, [
       'serve', '--obey_robots', '--log_level', 'warn',
-      '--host', '127.0.0.1', '--port', port.toString(),
+      '--host', '127.0.0.1', '--port', port.toString(), '--timeout', '86400',
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    proc.on('error', (err) => console.error(`[pool] ${id} error:`, err.message));
+    proc.on('error', (err) => log.error('pool', `${id} error: ${err.message}`));
     proc.on('exit', (code) => {
-      console.error(`[pool] ${id} exited: ${code}`);
+      log.warn('pool', `${id} exited with code ${code}`);
       const inst = this.instances.find(i => i.id === id);
       if (inst) inst.ready = false;
     });
@@ -141,6 +149,7 @@ export class LightpandaPool {
     for (let i = 0; i < 15; i++) {
       try {
         browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
+        log.info('pool', `${id} connected`);
         break;
       } catch (e) {
         await new Promise((resolve) => setTimeout(resolve, 200));

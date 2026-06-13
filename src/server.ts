@@ -6,9 +6,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { isCrashError } from './browser.js';
 import { SessionManager } from './session.js';
+import { log } from './logger.js';
 import type { ChromeManager } from './chrome.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
+
+const SESSION_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+function generateSessionId(): string {
+  let id = '';
+  for (let i = 0; i < 4; i++) id += SESSION_ID_CHARS[Math.floor(Math.random() * SESSION_ID_CHARS.length)];
+  return id;
+}
 
 export class PuppeteerMCPServer {
   private server: Server;
@@ -22,6 +31,7 @@ export class PuppeteerMCPServer {
     );
     this.sessionManager = new SessionManager();
     this.setupHandlers();
+    log.info('server', `Initialized. Log file: ${log.getPath()}`);
   }
 
   private setupHandlers(): void {
@@ -30,11 +40,12 @@ export class PuppeteerMCPServer {
         tools: [
           {
             name: 'browser_navigate',
-            description: 'Navigate to a URL',
+            description: 'Navigate to a URL. Provide session_id to reuse an existing session, or omit to create a new one.',
             inputSchema: {
               type: 'object',
               properties: {
                 url: { type: 'string', description: 'The URL to navigate to' },
+                session_id: { type: 'string', description: 'Session ID. Omit to create a new session.' },
                 waitUntil: {
                   type: 'string',
                   enum: ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
@@ -48,7 +59,13 @@ export class PuppeteerMCPServer {
           {
             name: 'browser_snapshot',
             description: 'Get YAML snapshot of the current page DOM tree with unique IDs',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+              },
+              required: ['session_id'],
+            },
           },
           {
             name: 'browser_view_node',
@@ -56,9 +73,10 @@ export class PuppeteerMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
                 nodeId: { type: 'number', description: 'The unique ID of the node to view (from snapshot)' },
               },
-              required: ['nodeId'],
+              required: ['session_id', 'nodeId'],
             },
           },
           {
@@ -67,9 +85,11 @@ export class PuppeteerMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
                 nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended)' },
                 selector: { type: 'string', description: 'CSS selector (use only if nodeId not available)' },
               },
+              required: ['session_id'],
             },
           },
           {
@@ -78,12 +98,13 @@ export class PuppeteerMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
                 nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended)' },
                 selector: { type: 'string', description: 'CSS selector (use only if nodeId not available)' },
                 text: { type: 'string', description: 'Text to type' },
                 delay: { type: 'number', description: 'Delay between keystrokes in ms', default: 0 },
               },
-              required: ['text'],
+              required: ['session_id', 'text'],
             },
           },
           {
@@ -92,10 +113,11 @@ export class PuppeteerMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
                 selector: { type: 'string', description: 'CSS selector for the input element' },
                 value: { type: 'string', description: 'Value to fill' },
               },
-              required: ['selector', 'value'],
+              required: ['session_id', 'selector', 'value'],
             },
           },
           // {
@@ -112,27 +134,56 @@ export class PuppeteerMCPServer {
           {
             name: 'browser_go_back',
             description: 'Navigate back in history',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+              },
+              required: ['session_id'],
+            },
           },
           {
             name: 'browser_go_forward',
             description: 'Navigate forward in history',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+              },
+              required: ['session_id'],
+            },
           },
           {
             name: 'browser_reload',
             description: 'Reload the current page',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+              },
+              required: ['session_id'],
+            },
           },
           {
             name: 'browser_get_page_info',
             description: 'Get information about the current page',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+              },
+              required: ['session_id'],
+            },
           },
           {
             name: 'browser_close',
             description: 'Close the browser session',
-            inputSchema: { type: 'object', properties: {} },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID to close' },
+              },
+            },
           },
         ],
       };
@@ -141,10 +192,26 @@ export class PuppeteerMCPServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const toolName = request.params.name;
       const args = request.params.arguments as Record<string, any>;
-      const sessionId = args?.session_id || 'default';
       const needsBrowser = toolName !== 'browser_install';
 
       if (needsBrowser) {
+        if (!args.session_id && toolName !== 'browser_navigate') {
+          return {
+            content: [{ type: 'text', text: `session_id: ERROR\nresult: session_id is required for ${toolName}` }],
+            isError: true,
+          };
+        }
+
+        if (!args.session_id) {
+          let sessionId = generateSessionId();
+          while (this.sessionManager.has(sessionId)) {
+            sessionId = generateSessionId();
+          }
+          args.session_id = sessionId;
+        }
+
+        const sessionId = args.session_id;
+
         return new Promise((resolve) => {
           const prev = this.sessionQueues.get(sessionId) || Promise.resolve();
           const next = prev.then(async () => {
@@ -161,16 +228,19 @@ export class PuppeteerMCPServer {
         });
       }
 
-      return this.executeTool(sessionId, toolName, args);
+      return this.executeTool('default', toolName, args);
     });
   }
 
   private async executeTool(sessionId: string, toolName: string, args: Record<string, any>): Promise<any> {
     const useChrome = args.use_chrome === true;
+    log.info(sessionId, `Executing ${toolName}`);
 
     if (!this.sessionManager.has(sessionId)) {
+      log.info(sessionId, `New session, acquiring browser (chrome=${useChrome})`);
       await this.sessionManager.acquire(sessionId, useChrome || this.sessionManager.shouldPreferChrome(sessionId));
     } else if (useChrome && CHROME_ENABLED && this.sessionManager.getBrowserType(sessionId) !== 'chrome') {
+      log.info(sessionId, `Switching to Chrome`);
       await this.sessionManager.acquire(sessionId, true);
     }
 
@@ -180,14 +250,19 @@ export class PuppeteerMCPServer {
     }
 
     try {
-      return await this.executeWithManager(sessionId, manager, toolName, args);
+      const result = await this.executeWithManager(sessionId, manager, toolName, args);
+      log.info(sessionId, `${toolName} completed`);
+      return result;
     } catch (error: any) {
       if (CHROME_ENABLED && isCrashError(error) && this.sessionManager.getBrowserType(sessionId) === 'lightpanda') {
-        console.error(`[session:${sessionId}] Lightpanda crashed on ${toolName}, switching to Chrome...`);
+        log.warn(sessionId, `Lightpanda crashed on ${toolName}, switching to Chrome`);
         this.sessionManager.markPreferChrome(sessionId);
         manager = await this.sessionManager.acquire(sessionId, true);
-        return this.executeWithManager(sessionId, manager, toolName, args);
+        const result = await this.executeWithManager(sessionId, manager, toolName, args);
+        log.info(sessionId, `${toolName} completed (after Chrome fallback)`);
+        return result;
       }
+      log.error(sessionId, `${toolName} failed: ${error instanceof Error ? error.message : String(error)}`);
       return {
         content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
@@ -197,68 +272,69 @@ export class PuppeteerMCPServer {
 
   private async executeWithManager(sessionId: string, manager: ChromeManager, toolName: string, args: Record<string, any>): Promise<any> {
     const browserType = this.sessionManager.getBrowserType(sessionId) || 'lightpanda';
+    const prefix = `session_id: ${sessionId}`;
 
     switch (toolName) {
       case 'browser_navigate':
-        await manager.navigate({ url: args.url, waitUntil: args.waitUntil || 'networkidle0' });
+        await manager.navigate({ url: args.url, waitUntil: args.waitUntil || 'load' });
         const info = await manager.getPageInfo();
-        return { content: [{ type: 'text', text: `[${browserType}:${sessionId.slice(0, 8)}] Navigated to ${info.url}. Title: ${info.title}` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: [${browserType}] Navigated to ${info.url}. Title: ${info.title}` }] };
 
       case 'browser_snapshot': {
         const snapshot = await manager.getSnapshot();
-        return { content: [{ type: 'text', text: snapshot.accessibilityTree }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: ${snapshot.accessibilityTree}` }] };
       }
 
       case 'browser_view_node': {
         const nodeResult = await manager.viewNode(args.nodeId);
         if (nodeResult.type === 'image') return { content: [{ type: 'image', data: nodeResult.content, mimeType: 'image/png' }] };
-        return { content: [{ type: 'text', text: nodeResult.content }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: ${nodeResult.content}` }] };
       }
 
       case 'browser_click': {
         const sel = args.nodeId !== undefined ? await manager.getSelectorByNodeId(args.nodeId) : args.selector;
-        if (!sel) return { content: [{ type: 'text', text: args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required' }] };
+        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required'}` }] };
         await manager.click(sel);
-        return { content: [{ type: 'text', text: `Clicked: ${sel}` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Clicked: ${sel}` }] };
       }
 
       case 'browser_type': {
         const typeSel = args.nodeId !== undefined ? await manager.getSelectorByNodeId(args.nodeId) : args.selector;
-        if (!typeSel) return { content: [{ type: 'text', text: args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required' }] };
+        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${args.nodeId !== undefined ? `Node ID ${args.nodeId} not found` : 'Selector is required'}` }] };
         await manager.type(typeSel, args.text, { delay: args.delay });
-        return { content: [{ type: 'text', text: `Typed into: ${typeSel}` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Typed into: ${typeSel}` }] };
       }
 
       case 'browser_fill':
         await manager.fill(args.selector, args.value);
-        return { content: [{ type: 'text', text: `Filled ${args.selector} with: ${args.value}` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Filled ${args.selector} with: ${args.value}` }] };
 
       case 'browser_evaluate': {
         const result = await manager.evaluate(args.script);
-        return { content: [{ type: 'text', text: typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result) }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}` }] };
       }
 
       case 'browser_go_back':
         await manager.goBack();
-        return { content: [{ type: 'text', text: 'Navigated back' }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Navigated back` }] };
 
       case 'browser_go_forward':
         await manager.goForward();
-        return { content: [{ type: 'text', text: 'Navigated forward' }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Navigated forward` }] };
 
       case 'browser_reload':
         await manager.reload();
-        return { content: [{ type: 'text', text: 'Page reloaded' }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Page reloaded` }] };
 
       case 'browser_get_page_info': {
         const page = await manager.getPageInfo();
-        return { content: [{ type: 'text', text: JSON.stringify(page, null, 2) }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: ${JSON.stringify(page, null, 2)}` }] };
       }
 
       case 'browser_close':
         await this.sessionManager.release(sessionId);
         this.sessionQueues.delete(sessionId);
-        return { content: [{ type: 'text', text: `Session ${sessionId.slice(0, 8)} closed` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: Session ${sessionId} closed` }] };
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);
@@ -268,5 +344,6 @@ export class PuppeteerMCPServer {
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    log.info('server', 'MCP server connected via stdio transport');
   }
 }

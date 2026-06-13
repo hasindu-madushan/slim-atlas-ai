@@ -5,26 +5,32 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import type { BrowserOptions, PageInfo, SnapshotResult, NavigateOptions, ScreenshotOptions } from './types.js';
 import { existsSync, chmodSync } from 'fs';
+import { treeToYaml, SNAPSHOT_FORMAT_EXPLANATION } from './snapshot-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const LIGHTPANDA_VERSION = process.env.LIGHTPANDA_VERSION || '0.3.1';
 
 async function installLightpanda(targetPath: string): Promise<void> {
   const platform = process.platform;
   const arch = process.arch;
   
+  const repo = 'lightpanda-io/browser';
+  const version = LIGHTPANDA_VERSION;
+  
   let url: string;
   if (platform === 'darwin') {
     url = arch === 'arm64' 
-      ? 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos'
-      : 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos';
+      ? `https://github.com/${repo}/releases/download/${version}/lightpanda-aarch64-macos`
+      : `https://github.com/${repo}/releases/download/${version}/lightpanda-x86_64-macos`;
   } else if (platform === 'linux') {
-    url = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux';
+    url = `https://github.com/${repo}/releases/download/${version}/lightpanda-x86_64-linux`;
   } else {
     throw new Error(`Unsupported platform: ${platform}`);
   }
 
-  console.log(`Downloading Lightpanda from ${url}...`);
+  console.log(`Downloading Lightpanda v${version} from ${url}...`);
   
   const { spawn: spawnAsync } = await import('child_process');
   const curl = spawnAsync('curl', ['-L', '-o', targetPath, url], { stdio: 'inherit' });
@@ -87,6 +93,7 @@ class BrowserManager {
       '--log_level', 'warn',
       '--host', '127.0.0.1',
       '--port', port.toString(),
+      '--timeout', '86400',
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -165,91 +172,6 @@ class BrowserManager {
     return this.idCounter++;
   }
 
-  private generateSelector(element: Element): string {
-    if (element.id) {
-      return `#${CSS.escape(element.id)}`;
-    }
-    
-    let selector = element.tagName.toLowerCase();
-    const parent = element.parentElement;
-    
-    if (parent) {
-      const siblings = Array.from(parent.children).filter(
-        (el) => el.tagName === element.tagName
-      );
-      if (siblings.length > 1) {
-        const index = siblings.indexOf(element) + 1;
-        selector += `:nth-of-type(${index})`;
-      }
-    }
-    
-    return selector;
-  }
-
-  private buildYamlTree(element: Element, id: number): any {
-    const node: any = {
-      id,
-      type: element.tagName.toLowerCase(),
-    };
-
-    this.idToSelector.set(id, this.generateSelector(element));
-
-    const textContent = element.textContent?.trim() || '';
-    if (textContent) {
-      const maxLength = 200;
-      node.text = textContent.length > maxLength 
-        ? textContent.substring(0, maxLength) + '... (trimmed)'
-        : textContent;
-    }
-
-    const children: any[] = [];
-    for (const child of element.children) {
-      const childId = this.generateUniqueId();
-      const childNode = this.buildYamlTree(child, childId);
-      children.push({ [childId]: childNode });
-    }
-
-    if (children.length > 0) {
-      node.children = children;
-    }
-
-    return node;
-  }
-
-  private treeToYaml(obj: any, indent: number = 0): string {
-    const spaces = '  '.repeat(indent);
-    let lines: string[] = [];
-
-    if (typeof obj === 'object' && obj !== null) {
-      for (const [key, value] of Object.entries(obj)) {
-        if (!isNaN(Number(key))) {
-          lines.push(`${key}:`);
-          lines.push(this.treeToYaml(value, indent + 1));
-        } else if (key === 'type') {
-          lines.push(`${spaces}${key}: ${value}`);
-        } else if (key === 'text') {
-          const escaped = String(value).replace(/"/g, '\\"');
-          lines.push(`${spaces}${key}: "${escaped}"`);
-        } else if (key === 'image_alt') {
-          const escaped = String(value).replace(/"/g, '\\"');
-          lines.push(`${spaces}${key}: "${escaped}"`);
-        } else if (key === 'children') {
-          lines.push(`${spaces}${key}:`);
-          for (const child of (value as any[])) {
-            if (typeof child === 'object' && child !== null) {
-              for (const [childId, childObj] of Object.entries(child)) {
-                lines.push(`${spaces}  ${childId}:`);
-                lines.push(this.treeToYaml(childObj, indent + 2));
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return lines.join('\n');
-  }
-
   async getSnapshot(): Promise<SnapshotResult> {
     const page = this.getPage();
     this.idCounter = 0;
@@ -258,162 +180,97 @@ class BrowserManager {
     const flattenSingleChild = this.snapshotOptions.flattenSingleChild;
     const textTrimLength = this.snapshotOptions.textTrimLength;
 
-    const yamlTree = await page.evaluate((flattenOption, maxLength) => {
-      function buildTree(element: Element, idObj: { counter: number }, idToSelector: Map<number, string>, shouldFlatten: boolean, trimLength: number): any {
-        const id = idObj.counter++;
-        
-        const selector = element.id 
-          ? `#${element.id}` 
-          : element.tagName.toLowerCase();
-        idToSelector.set(id, selector);
+    // Build DOM tree using string-based page.evaluate()
+    // Config values are embedded in the string since Puppeteer ignores args for string-based evaluate
+    const yamlTree = await page.evaluate(`
+      (function() {
+        var shouldFlatten = ${JSON.stringify(flattenSingleChild)};
+        var trimLength = ${JSON.stringify(textTrimLength)};
+        var idObj = { counter: 0 };
 
-        const node: any = {
-          type: element.tagName.toLowerCase(),
-        };
-
-        if (element.tagName.toLowerCase() === 'img') {
-          const alt = (element as HTMLImageElement).alt;
-          const src = (element as HTMLImageElement).src;
-          
-          if (alt) {
-            node.image_alt = alt;
-          } else if (src) {
-            const filename = src.split('/').pop()?.split('?')[0] || '';
-            if (filename) {
-              node.image_alt = filename;
+        function buildTree(el) {
+          var id = idObj.counter++;
+          var node = { type: el.tagName.toLowerCase() };
+          if (el.tagName.toLowerCase() === 'img') {
+            var alt = el.alt;
+            var src = el.src;
+            if (alt) node.image_alt = alt;
+            else if (src) {
+              var filename = src.split('/').pop().split('?')[0] || '';
+              if (filename) node.image_alt = filename;
             }
           }
-        }
-
-        let textContent = '';
-        for (const child of element.childNodes) {
-          if (child.nodeType === Node.TEXT_NODE) {
-            textContent += child.textContent;
+          var textContent = '';
+          for (var i = 0; i < el.childNodes.length; i++) {
+            var child = el.childNodes[i];
+            if (child.nodeType === Node.TEXT_NODE) textContent += child.textContent;
           }
-        }
-        textContent = textContent.trim();
-        if (textContent) {
-          const maxLength = 200;
-          node.text = textContent.length > maxLength 
-            ? textContent.substring(0, trimLength) + '... (trimmed)'
-            : textContent;
-        }
-
-        const children: any[] = [];
-        for (const child of element.children) {
-          if (child.tagName.toLowerCase() === 'br') continue;
-          const childNode = buildTree(child, idObj, idToSelector, shouldFlatten, trimLength);
-          children.push(childNode);
-        }
-
-        if (shouldFlatten && children.length === 1 && !node.text && !node.src) {
-          return children[0];
-        }
-
-        if (children.length > 0) {
-          node.children = children;
-        }
-
-        return { [id]: node };
-      }
-
-      const idObj = { counter: 0 };
-      const idToSelector = new Map<number, string>();
-      const root = document.body;
-      return buildTree(root, idObj, idToSelector, flattenOption, maxLength);
-    }, flattenSingleChild, textTrimLength);
-
-    const yamlOutput = this.treeToYaml(yamlTree);
-    
-    const selectorMap = await page.evaluate(() => {
-      function generateSelector(element: Element): string {
-        let selector = element.tagName.toLowerCase();
-        
-        if (element.id) {
-          return `#${CSS.escape(element.id)}`;
-        }
-        
-        const parent = element.parentElement;
-        if (parent) {
-          const siblings = Array.from(parent.children).filter(
-            (el) => el.tagName === element.tagName
-          );
-          if (siblings.length > 1) {
-            const index = siblings.indexOf(element) + 1;
-            selector += `:nth-of-type(${index})`;
+          textContent = textContent.trim();
+          if (textContent) {
+            node.text = textContent.length > trimLength
+              ? textContent.substring(0, trimLength) + '... (trimmed)'
+              : textContent;
           }
-        }
-        
-        let path = selector;
-        let current: Element | null = element.parentElement;
-        while (current && current !== document.body) {
-          const tag = current.tagName.toLowerCase();
-          if (current.id) {
-            path = `#${CSS.escape(current.id)} > ${path}`;
-            break;
+          var children = [];
+          for (var j = 0; j < el.children.length; j++) {
+            var ch = el.children[j];
+            if (ch.tagName.toLowerCase() === 'br') continue;
+            children.push(buildTree(ch));
           }
-          const parentSiblings = Array.from(current.parentElement?.children || []).filter(
-            (el) => el.tagName === current!.tagName
-          );
-          if (parentSiblings.length > 1) {
-            const idx = parentSiblings.indexOf(current) + 1;
-            path = `${tag}:nth-of-type(${idx}) > ${path}`;
-          } else {
-            path = `${tag} > ${path}`;
+          if (shouldFlatten && children.length === 1 && !node.text && !node.src) return children[0];
+          if (children.length > 0) node.children = children;
+          var obj = {};
+          obj[id] = node;
+          return obj;
+        }
+        return buildTree(document.body);
+      })()
+    `);
+
+    const yamlOutput = treeToYaml(yamlTree);
+
+    // Build selector map using string-based page.evaluate()
+    const selectorMap = await page.evaluate(`
+      (function() {
+        function gen(el) {
+          if (el.id) return '#' + CSS.escape(el.id);
+          var s = el.tagName.toLowerCase();
+          var p = el.parentElement;
+          if (p) {
+            var sibs = Array.from(p.children).filter(function(c) { return c.tagName === el.tagName; });
+            if (sibs.length > 1) s += ':nth-of-type(' + (sibs.indexOf(el) + 1) + ')';
           }
-          current = current.parentElement;
+          var path = s;
+          var c = el.parentElement;
+          while (c && c !== document.body) {
+            var t = c.tagName.toLowerCase();
+            if (c.id) { path = '#' + CSS.escape(c.id) + ' > ' + path; break; }
+            var ps = Array.from(c.parentElement ? c.parentElement.children : []).filter(function(x) { return x.tagName === c.tagName; });
+            if (ps.length > 1) path = t + ':nth-of-type(' + (ps.indexOf(c) + 1) + ') > ' + path;
+            else path = t + ' > ' + path;
+            c = c.parentElement;
+          }
+          return path;
         }
-        return path;
-      }
-
-      const map: Record<number, string> = {};
-      function traverse(element: Element, idObj: { counter: number }, selectors: Map<number, string>): void {
-        const id = idObj.counter++;
-        selectors.set(id, generateSelector(element));
-        for (const child of element.children) {
-          traverse(child, idObj, selectors);
+        var map = {};
+        var local = new Map();
+        function assign(el, obj) {
+          var id = obj.value++;
+          local.set(id, gen(el));
+          for (var i = 0; i < el.children.length; i++) assign(el.children[i], obj);
         }
-      }
-      
-      traverse(document.body, { counter: 0 }, new Map());
-      
-      const allElements = document.querySelectorAll('*');
-      const idObj = { value: 0 };
-      const selectorMap = new Map<number, string>();
-      
-      function assignIds(element: Element, counterObj: { value: number }): number {
-        const id = counterObj.value++;
-        const selector = generateSelector(element);
-        selectorMap.set(id, selector);
-        for (const child of element.children) {
-          assignIds(child, counterObj);
-        }
-        return id;
-      }
-      
-      assignIds(document.body, idObj);
-      
-      selectorMap.forEach((value, key) => {
-        map[key] = value;
-      });
-      
-      return map;
-    });
+        assign(document.body, { value: 0 });
+        local.forEach(function(v, k) { map[k] = v; });
+        return map;
+      })()
+    `) as Record<number, string>;
 
-    const formatExplanation = `## YAML Snapshot Format
-
-Each node contains:
-- \`id\`: Unique numeric identifier for the node
-- \`type\`: HTML tag name (e.g., div, p, span, button)
-- \`text\`: Text content between tags (trimmed to 200 chars, marked with "... (trimmed)" if truncated)
-- \`children\`: Child nodes in the same format
-
-The ID to CSS selector mapping is maintained in memory for referencing nodes in subsequent operations.`;
-
-    const fullOutput = `${formatExplanation}\n\n---\n\n${yamlOutput}`;
+    for (const [id, selector] of Object.entries(selectorMap)) {
+      this.idToSelector.set(Number(id), selector);
+    }
 
     return {
-      accessibilityTree: fullOutput,
+      accessibilityTree: `${SNAPSHOT_FORMAT_EXPLANATION}\n\n---\n\n${yamlOutput}`,
       url: page.url(),
       title: await page.title(),
     };
@@ -422,88 +279,23 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
   async viewNode(nodeId: number): Promise<{ type: 'text' | 'image'; content: string }> {
     const page = this.getPage();
     
-    const result = await page.evaluate((id) => {
-      function generateSelector(element: Element): string {
-        if (element.id) {
-          return `#${CSS.escape(element.id)}`;
+    const result = await page.evaluate(`
+      function(id) {
+        function traverse(el, obj, target) {
+          var cid = obj.counter++;
+          if (cid === target) return el;
+          for (var i = 0; i < el.children.length; i++) { var f = traverse(el.children[i], obj, target); if (f) return f; }
+          return null;
         }
-        
-        let selector = element.tagName.toLowerCase();
-        const parent = element.parentElement;
-        
-        if (parent) {
-          const siblings = Array.from(parent.children).filter(
-            (el) => el.tagName === element.tagName
-          );
-          if (siblings.length > 1) {
-            const index = siblings.indexOf(element) + 1;
-            selector += `:nth-of-type(${index})`;
-          }
-        }
-        
-        let path = selector;
-        let current: Element | null = element.parentElement;
-        while (current && current !== document.body) {
-          const tag = current.tagName.toLowerCase();
-          if (current.id) {
-            path = `#${CSS.escape(current.id)} > ${path}`;
-            break;
-          }
-          const parentSiblings = Array.from(current.parentElement?.children || []).filter(
-            (el) => el.tagName === current!.tagName
-          );
-          if (parentSiblings.length > 1) {
-            const idx = parentSiblings.indexOf(current) + 1;
-            path = `${tag}:nth-of-type(${idx}) > ${path}`;
-          } else {
-            path = `${tag} > ${path}`;
-          }
-          current = current.parentElement;
-        }
-        return path;
+        var el = traverse(document.body, { counter: 0 }, id);
+        if (!el) return { type: 'text', text: 'Node with ID ' + id + ' not found' };
+        if (el.tagName.toLowerCase() === 'img') { var src = el.src; if (src) return { type: 'image', src: src }; }
+        var t = '';
+        for (var i = 0; i < el.childNodes.length; i++) { var c = el.childNodes[i]; if (c.nodeType === Node.TEXT_NODE) t += c.textContent; }
+        t = t.trim();
+        return t ? { type: 'text', text: t } : { type: 'text', text: '(no text content)' };
       }
-
-      function traverse(element: Element, idObj: { counter: number }, targetId: number): Element | null {
-        const currentId = idObj.counter++;
-        
-        if (currentId === targetId) {
-          return element;
-        }
-        
-        for (const child of element.children) {
-          const found = traverse(child, idObj, targetId);
-          if (found) return found;
-        }
-        return null;
-      }
-
-      const element = traverse(document.body, { counter: 0 }, id);
-      
-      if (!element) return { type: 'text', text: `Node with ID ${id} not found` };
-      
-      const tagName = element.tagName.toLowerCase();
-      
-      if (tagName === 'img') {
-        const src = (element as HTMLImageElement).src;
-        if (src) {
-          return { type: 'image', src };
-        }
-      }
-      
-      let textContent = '';
-      for (const child of element.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE) {
-          textContent += child.textContent;
-        }
-      }
-      textContent = textContent.trim();
-      
-      if (textContent) {
-        return { type: 'text', text: textContent };
-      }
-      
-      return { type: 'text', text: '(no text content)' };
-    }, nodeId);
+    `, nodeId) as any;
 
     if (!result) {
       return { type: 'text', content: `Node with ID ${nodeId} not found` };
@@ -527,62 +319,38 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
   async getSelectorByNodeId(nodeId: number): Promise<string | null> {
     const page = this.getPage();
     
-    return await page.evaluate((id) => {
-      function generateSelector(element: Element): string {
-        if (element.id) {
-          return `#${CSS.escape(element.id)}`;
-        }
-        
-        let selector = element.tagName.toLowerCase();
-        const parent = element.parentElement;
-        
-        if (parent) {
-          const siblings = Array.from(parent.children).filter(
-            (el) => el.tagName === element.tagName
-          );
-          if (siblings.length > 1) {
-            const index = siblings.indexOf(element) + 1;
-            selector += `:nth-of-type(${index})`;
+    return await page.evaluate(`
+      function(id) {
+        function gen(el) {
+          if (el.id) return '#' + CSS.escape(el.id);
+          var s = el.tagName.toLowerCase();
+          var p = el.parentElement;
+          if (p) {
+            var sibs = Array.from(p.children).filter(function(c) { return c.tagName === el.tagName; });
+            if (sibs.length > 1) s += ':nth-of-type(' + (sibs.indexOf(el) + 1) + ')';
           }
-        }
-        
-        let path = selector;
-        let current: Element | null = element.parentElement;
-        while (current && current !== document.body) {
-          const tag = current.tagName.toLowerCase();
-          if (current.id) {
-            path = `#${CSS.escape(current.id)} > ${path}`;
-            break;
+          var path = s;
+          var c = el.parentElement;
+          while (c && c !== document.body) {
+            var t = c.tagName.toLowerCase();
+            if (c.id) { path = '#' + CSS.escape(c.id) + ' > ' + path; break; }
+            var ps = Array.from(c.parentElement ? c.parentElement.children : []).filter(function(x) { return x.tagName === c.tagName; });
+            if (ps.length > 1) path = t + ':nth-of-type(' + (ps.indexOf(c) + 1) + ') > ' + path;
+            else path = t + ' > ' + path;
+            c = c.parentElement;
           }
-          const parentSiblings = Array.from(current.parentElement?.children || []).filter(
-            (el) => el.tagName === current!.tagName
-          );
-          if (parentSiblings.length > 1) {
-            const idx = parentSiblings.indexOf(current) + 1;
-            path = `${tag}:nth-of-type(${idx}) > ${path}`;
-          } else {
-            path = `${tag} > ${path}`;
-          }
-          current = current.parentElement;
+          return path;
         }
-        return path;
+        function traverse(el, obj) {
+          var cid = obj.counter++;
+          if (cid === id) return el;
+          for (var i = 0; i < el.children.length; i++) { var f = traverse(el.children[i], obj); if (f) return f; }
+          return null;
+        }
+        var el = traverse(document.body, { counter: 0 });
+        return el ? gen(el) : null;
       }
-
-      function traverse(element: Element, idObj: { counter: number }): Element | null {
-        const currentId = idObj.counter++;
-        if (currentId === id) return element;
-        for (const child of element.children) {
-          const found = traverse(child, idObj);
-          if (found) return found;
-        }
-        return null;
-      }
-
-      const element = traverse(document.body, { counter: 0 });
-      if (!element) return null;
-      
-      return generateSelector(element);
-    }, nodeId);
+    `, nodeId) as Promise<string | null>;
   }
 
   async click(selector: string): Promise<void> {
@@ -598,12 +366,10 @@ The ID to CSS selector mapping is maintained in memory for referencing nodes in 
   async fill(selector: string, value: string): Promise<void> {
     const page = this.getPage();
     await page.focus(selector);
-    await page.evaluate((sel) => {
-      const el = document.querySelector(sel) as HTMLInputElement;
-      if (el) {
-        el.value = '';
-      }
-    }, selector);
+    await page.evaluate(`function(sel) {
+      var el = document.querySelector(sel);
+      if (el) el.value = '';
+    }`, selector);
     await page.type(selector, value);
   }
 
@@ -675,7 +441,6 @@ export function isCrashError(error: any): boolean {
     msg.includes('segmentation') ||
     msg.includes('detached') ||
     msg.includes('not connected') ||
-    msg.includes('connection closed') ||
-    msg.includes('protocol error')
+    msg.includes('connection closed')
   );
 }

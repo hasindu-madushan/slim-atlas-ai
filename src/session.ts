@@ -1,6 +1,7 @@
 import { LightpandaPool } from './pool.js';
 import { ChromePool } from './chrome-pool.js';
 import { ChromeManager } from './chrome.js';
+import { log } from './logger.js';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
@@ -35,6 +36,7 @@ export class SessionManager {
 
     if (state && state.manager) {
       if ((preferChrome || state.preferChrome) && state.browserType === 'lightpanda' && CHROME_ENABLED) {
+        log.info(sessionId, `Existing session, switching from lightpanda to Chrome`);
         await this.switchToChrome(sessionId, state);
       }
       return state.manager;
@@ -47,13 +49,15 @@ export class SessionManager {
       manager: null,
     };
 
+    log.info(sessionId, `New session, browser=${state.browserType}`);
+
     if (state.browserType === 'chrome') {
       await this.attachChrome(sessionId, state);
     } else {
       try {
         await this.attachLightpanda(sessionId, state);
       } catch (e: any) {
-        console.error(`[session:${sessionId}] Lightpanda failed: ${e.message}, falling back to Chrome`);
+        log.warn(sessionId, `Lightpanda failed: ${e.message}, falling back to Chrome`);
         if (CHROME_ENABLED) {
           state.preferChrome = true;
           state.browserType = 'chrome';
@@ -85,7 +89,7 @@ export class SessionManager {
   }
 
   private async switchToChrome(sessionId: string, state: SessionState): Promise<void> {
-    console.error(`[session] ${sessionId} switching from lightpanda to Chrome`);
+    log.info(sessionId, `Switching from lightpanda to Chrome`);
     state.preferChrome = true;
     state.browserType = 'chrome';
 
@@ -110,6 +114,8 @@ export class SessionManager {
   async release(sessionId: string): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state) return;
+
+    log.info(sessionId, `Releasing session`);
 
     if (state.manager) {
       try { await state.manager.close(); } catch (e) {}
