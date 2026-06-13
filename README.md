@@ -2,35 +2,42 @@
 
 # SlimAtlas AI
 
-A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **MacOs** and **Linux**.
+A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **macOS**, **Linux**, and **Windows**.
 
 Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.com/lightpanda-io/browser).
 
 ## Features
 
 - **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
-- **Page Snapshots**: Get accessibility tree snapshots of pages
-- **Screenshots**: Capture full page or viewport screenshots
+- **Page Snapshots**: Get YAML accessibility tree snapshots with unique node IDs for precise element targeting
+- **Node Inspection**: View specific nodes by ID to inspect text content or images
 - **History Navigation**: Go back, go forward, and reload pages
-- **HTML Extraction**: Get page HTML content
-- **Lightweight**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
+- **Lightweight by Default**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
+- **Automatic Chrome Fallback**: If Lightpanda crashes or fails, automatically switches to Chrome for reliability
+- **Session Management**: Reuse sessions across multiple operations with unique session IDs
+- **Cross-Platform**: Works on macOS, Linux (Lightpanda), and Windows (Chrome fallback)
 
 ## Installation
 
 ```bash
 # Install dependencies
 npm install
+```
 
-# Download Lightpanda browser (not required. Will download automatically)
-# For Linux x86_64:
+Lightpanda binary will be downloaded automatically on first run. You can also manually download it:
+
+```bash
+# Linux x86_64
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && chmod a+x ./lightpanda
 
-# For MacOS aarch64 (Apple Silicon):
+# macOS aarch64 (Apple Silicon)
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && chmod a+x ./lightpanda
 
-# For MacOS x86_64:
+# macOS x86_64
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
 ```
+
+**Windows / Chrome Fallback**: On Windows, Lightpanda is not available. The server automatically falls back to Chrome (via Puppeteer). This also works as a fallback on macOS/Linux if Lightpanda fails. Ensure Chrome/Chromium is installed, or let Puppeteer download it automatically.
 
 ## Usage
 
@@ -56,23 +63,46 @@ Add to your MCP client configuration:
 }
 ```
 
+**Tip**: Set `CHROME_ENABLED=false` to disable Chrome fallback and use Lightpanda only.
+
+### Usage Workflow
+
+```python
+# Example: Navigate, snapshot, and interact with a page
+
+# 1. Navigate to a URL (creates a new session automatically)
+result = mcp.call("browser_navigate", {"url": "https://example.com"})
+# Returns: session_id: abc1, result: [lightpanda] Navigated to https://example.com. Title: Example Domain
+
+# 2. Take a snapshot to see the page structure
+snapshot = mcp.call("browser_snapshot", {"session_id": "abc1"})
+# Returns YAML with node IDs like: 0: {type: div, children: ...}
+
+# 3. Click a node by ID (from the snapshot)
+mcp.call("browser_click", {"session_id": "abc1", "nodeId": 2})
+
+# 4. Type into a search box
+mcp.call("browser_type", {"session_id": "abc1", "nodeId": 5, "text": "search query"})
+
+# 5. Close the session when done
+mcp.call("browser_close", {"session_id": "abc1"})
+```
+
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `browser_navigate` | Navigate to a URL |
-| `browser_snapshot` | Get accessibility snapshot |
-| `browser_click` | Click an element |
-| `browser_type` | Type text into an element |
-| `browser_fill` | Fill an input with a value |
-| `browser_evaluate` | Evaluate JavaScript |
-| `browser_get_html` | Get page HTML |
-| `browser_go_back` | Navigate back |
-| `browser_go_forward` | Navigate forward |
-| `browser_reload` | Reload the page |
-| `browser_get_page_info` | Get page info |
-| `browser_close` | Close the browser |
-| `browser_install` | Install browser |
+| Tool | Description | Value |
+|------|-------------|-------|
+| `browser_navigate` | Navigate to a URL with configurable wait strategy | Entry point for all web interactions. Supports `load`, `domcontentloaded`, `networkidle0`, `networkidle2` |
+| `browser_snapshot` | Get YAML accessibility tree with unique node IDs | Structured page representation ideal for LLM understanding. Node IDs enable precise targeting for clicks/types |
+| `browser_view_node` | View specific node content by ID (text or image) | Inspect individual elements without full page re-read. Returns images as base64 for visual verification |
+| `browser_click` | Click element by node ID or CSS selector | Node ID (from snapshot) is recommended over CSS selectors for reliability and simplicity |
+| `browser_type` | Type text into element with optional keystroke delay | Simulates human typing. Use for search boxes, forms, and text inputs |
+| `browser_fill` | Fill input element with a value instantly | Faster than `browser_type` for form fields. Clears existing value before filling |
+| `browser_go_back` | Navigate back in browser history | Essential for multi-step workflows and correcting navigation mistakes |
+| `browser_go_forward` | Navigate forward in browser history | Complements `browser_go_back` for bidirectional navigation |
+| `browser_reload` | Reload the current page | Refresh dynamic content or recover from stale page state |
+| `browser_get_page_info` | Get current page URL and title | Quick way to verify navigation success and current context |
+| `browser_close` | Close browser session and free resources | Important for cleanup. Sessions auto-close on timeout, but explicit closing is recommended |
 
 ## Running Tests
 
@@ -84,27 +114,10 @@ npm test
 npx vitest
 ```
 
-## Project Structure
-
-```
-slimatlas/
-├── src/
-│   ├── index.ts       # Main entry point
-│   ├── server.ts      # MCP server implementation
-│   ├── browser.ts     # Browser manager
-│   └── types.ts       # Type definitions
-├── test/
-│   ├── server.test.ts     # Server tests
-│   ├── integration.test.ts # Integration tests
-│   └── mcp.test.ts        # MCP protocol tests
-├── lightpanda         # Lightpanda browser binary
-└── package.json
-```
-
 ## Requirements
 
 - Node.js 18+
-- Lightpanda browser (downloads automatically or manually)
+- Lightpanda browser (macOS/Linux, downloads automatically) OR Chrome/Chromium (Windows, or as fallback)
 
 ## License
 
