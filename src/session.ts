@@ -5,6 +5,7 @@ import { log } from './logger.js';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
+const RESOURCE_LOGGING_ENABLED = process.env.RESOURCE_LOGGING_ENABLED !== 'false';
 
 export type BrowserType = 'lightpanda' | 'chrome';
 
@@ -15,6 +16,7 @@ interface SessionState {
   lpInstanceId?: string;
   chromeSlotId?: string;
   manager: ChromeManager | null;
+  lastActiveTime: number;
 }
 
 export class SessionManager {
@@ -47,6 +49,7 @@ export class SessionManager {
       preferChrome: preferChrome && CHROME_ENABLED,
       queue: Promise.resolve(),
       manager: null,
+      lastActiveTime: Date.now(),
     };
 
     log.info(sessionId, `New session, browser=${state.browserType}`);
@@ -153,6 +156,44 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.preferChrome ?? false;
   }
 
+  touchSession(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) state.lastActiveTime = Date.now();
+  }
+
+  getIdleSessionIds(idleTimeoutMs: number): string[] {
+    const now = Date.now();
+    const idle: string[] = [];
+    for (const [sessionId, state] of this.sessions) {
+      if (now - state.lastActiveTime > idleTimeoutMs) {
+        idle.push(sessionId);
+      }
+    }
+    return idle;
+  }
+
+  getActiveSessionIds(): Set<string> {
+    return new Set(this.sessions.keys());
+  }
+
+  async purgeOrphanedInstances(activeSessionIds: Set<string>): Promise<void> {
+    const activeLpIds = new Set<string>();
+    for (const [sessionId, state] of this.sessions) {
+      if (activeSessionIds.has(sessionId) && state.lpInstanceId) {
+        activeLpIds.add(state.lpInstanceId);
+      }
+    }
+    await this.lpPool.killOrphaned(activeLpIds);
+
+    const activeChromeIds = new Set<string>();
+    for (const [sessionId, state] of this.sessions) {
+      if (activeSessionIds.has(sessionId) && state.chromeSlotId) {
+        activeChromeIds.add(state.chromeSlotId);
+      }
+    }
+    await this.chromePool.killOrphaned(activeChromeIds);
+  }
+
   getManager(sessionId: string): ChromeManager | null {
     return this.sessions.get(sessionId)?.manager ?? null;
   }
@@ -167,11 +208,19 @@ export class SessionManager {
     await this.chromePool.shutdown();
   }
 
-  getStats() {
+  async getStats() {
     return {
       sessions: this.sessions.size,
-      lightpanda: this.lpPool.getStats(),
-      chrome: this.chromePool.getStats(),
+      lightpanda: await this.lpPool.getStats(),
+      chrome: await this.chromePool.getStats(),
     };
+  }
+
+  async logResourceUsage(): Promise<void> {
+    if (!RESOURCE_LOGGING_ENABLED) return;
+    const stats = await this.getStats();
+    const lpMb = (stats.lightpanda.memoryBytes / 1024 / 1024).toFixed(1);
+    const chromeMb = (stats.chrome.memoryBytes / 1024 / 1024).toFixed(1);
+    log.info('resources', `Sessions: ${stats.sessions} | Lightpanda: ${stats.lightpanda.total} instances (${lpMb} MB) | Chrome: ${stats.chrome.total} instances (${chromeMb} MB)`);
   }
 }

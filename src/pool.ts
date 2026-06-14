@@ -35,6 +35,16 @@ function isPortInUse(port: number): Promise<boolean> {
   });
 }
 
+function getProcessMemoryBytes(pid: number): Promise<number> {
+  return new Promise((resolve) => {
+    exec(`ps -p ${pid} -o rss=`, (err, stdout) => {
+      if (err) return resolve(0);
+      const kb = parseInt(stdout.trim(), 10);
+      resolve(isNaN(kb) ? 0 : kb * 1024);
+    });
+  });
+}
+
 export class LightpandaPool {
   private instances: LightpandaInstance[] = [];
   private available: LightpandaInstance[] = [];
@@ -181,12 +191,40 @@ export class LightpandaPool {
     this.waitQueue = [];
   }
 
-  getStats() {
+  async getStats() {
+    const memoryBytes = await this.getMemoryUsageBytes();
     return {
       total: this.instances.length,
       available: this.available.length,
       inUse: this.inUse.size,
       maxSize: MAX_SIZE,
+      memoryBytes,
     };
+  }
+
+  async getMemoryUsageBytes(): Promise<number> {
+    let total = 0;
+    for (const inst of this.instances) {
+      if (inst.process.pid) {
+        total += await getProcessMemoryBytes(inst.process.pid);
+      }
+    }
+    return total;
+  }
+
+  async killOrphaned(activeInstanceIds: Set<string>): Promise<void> {
+    const toKill = this.available.filter(inst => !activeInstanceIds.has(inst.id));
+    this.available = this.available.filter(inst => activeInstanceIds.has(inst.id));
+
+    for (const inst of toKill) {
+      log.info('pool', `Killing orphaned Lightpanda instance ${inst.id} (port ${inst.port})`);
+      const idx = this.instances.findIndex(i => i.id === inst.id);
+      if (idx >= 0) this.instances.splice(idx, 1);
+      try { await inst.page?.close(); } catch (e) {}
+      try { await inst.context?.close(); } catch (e) {}
+      try { inst.browser?.disconnect(); } catch (e) {}
+      try { inst.process.kill('SIGKILL'); } catch (e) {}
+      await killPort(inst.port);
+    }
   }
 }
