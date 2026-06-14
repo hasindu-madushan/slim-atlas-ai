@@ -1,66 +1,121 @@
 /**
- * Shared snapshot utilities for building DOM trees and generating YAML output.
- *
- * Browser-side functions are defined here and can be used with page.evaluate()
- * by wrapping them in a callback. Node.js-side utilities are exported as regular functions.
+ * Shared snapshot utilities for building semantic DOM snapshots.
+ * Browser-side functions are re-implemented inline in browser-tools.ts
+ * due to Puppeteer's page.evaluate() limitations.
  */
 
-/**
- * buildTree - runs in browser context via page.evaluate().
- * Builds a DOM tree from an element with unique numeric IDs.
- */
-export function buildTree(element: Element, idObj: { counter: number }, shouldFlatten: boolean, trimLength: number): any {
-  const id = idObj.counter++;
-  const node: any = { type: element.tagName.toLowerCase() };
+// Tags to skip in output (flatten, recurse into children, no ID assigned)
+export const SKIP_TAGS = new Set([
+  'div', 'span', 'br', 'hr',
+  'script', 'style', 'noscript', 'template', 'slot',
+  'main', 'section', 'article', 'aside',
+  'strong', 'em', 'b', 'i', 'u', 's', 'mark', 'del', 'ins', 'sub', 'sup', 'small',
+  'code', 'kbd', 'samp', 'var', 'abbr', 'time', 'data', 'wbr',
+  'picture', 'source', 'figure', 'figcaption',
+  'dl', 'dt', 'dd', 'blockquote', 'q', 'cite', 'pre',
+  'svg', 'path', 'g', 'circle', 'rect', 'line', 'polygon', 'polyline',
+  'thead', 'tbody', 'tfoot', 'colgroup', 'col',
+  'map', 'area', 'canvas', 'audio', 'video',
+  'head', 'title', 'meta', 'link', 'base',
+  'meter', 'progress', 'output',
+  'ul', 'ol',
+  'body',
+]);
 
-  if (element.tagName.toLowerCase() === 'img') {
-    const alt = (element as HTMLImageElement).alt;
-    const src = (element as HTMLImageElement).src;
-    if (alt) {
-      node.image_alt = alt;
-    } else if (src) {
-      const filename = src.split('/').pop()?.split('?')[0] || '';
-      if (filename) node.image_alt = filename;
-    }
-  }
+// HTML tag to semantic type name mapping
+export const ELEMENT_TYPE_MAP: Record<string, string | null> = {
+  'p': 'text',
+  'h1': 'heading_1', 'h2': 'heading_2', 'h3': 'heading_3',
+  'h4': 'heading_4', 'h5': 'heading_5', 'h6': 'heading_6',
+  'a': 'link',
+  'button': 'button',
+  'textarea': 'textbox',
+  'select': 'combobox',
+  'img': 'image',
+  'li': 'listitem',
+  'ul': 'list', 'ol': 'list',
+  'table': 'table',
+  'tr': 'row',
+  'td': 'cell', 'th': 'columnheader',
+  'footer': 'contentinfo',
+  'header': 'banner',
+  'nav': 'navigation',
+  'form': 'form',
+  'label': 'label',
+  'dialog': 'dialog',
+  'fieldset': 'group', 'legend': 'label',
+  'summary': 'button', 'details': 'group',
+  'option': 'option',
+};
 
-  let textContent = '';
-  for (let i = 0; i < element.childNodes.length; i++) {
-    const child = element.childNodes[i];
-    if (child.nodeType === Node.TEXT_NODE) {
-      textContent += child.textContent || '';
-    }
-  }
-  textContent = textContent.trim();
-  if (textContent) {
-    node.text = textContent.length > trimLength
-      ? textContent.substring(0, trimLength) + '... (trimmed)'
-      : textContent;
-  }
+// Input type attribute to semantic type mapping
+export const INPUT_TYPE_MAP: Record<string, string> = {
+  'text': 'textbox', 'search': 'searchbox', 'email': 'textbox',
+  'tel': 'textbox', 'url': 'textbox', 'password': 'textbox',
+  'number': 'spinbutton', 'checkbox': 'checkbox', 'radio': 'radio',
+  'range': 'slider', 'submit': 'button', 'reset': 'button',
+  'button': 'button', 'file': 'file', 'color': 'color',
+  'date': 'textbox', 'datetime-local': 'textbox',
+  'month': 'textbox', 'week': 'textbox', 'time': 'textbox',
+  'image': 'button',
+};
 
-  const children: any[] = [];
-  for (let j = 0; j < element.children.length; j++) {
-    const ch = element.children[j];
-    if (ch.tagName.toLowerCase() === 'br') continue;
-    children.push(buildTree(ch, idObj, shouldFlatten, trimLength));
-  }
+// Elements that are inherently interactable
+export const INTERACTABLE_TAGS = new Set([
+  'a', 'button', 'input', 'textarea', 'select', 'summary',
+]);
 
-  if (shouldFlatten && children.length === 1 && !node.text && !node.src) {
-    return children[0];
-  }
+// Interactive ARIA roles
+export const INTERACTIVE_ROLES: Record<string, boolean> = {
+  'button': true, 'link': true, 'checkbox': true, 'radio': true,
+  'tab': true, 'switch': true, 'menuitem': true, 'option': true,
+  'slider': true, 'spinbutton': true, 'combobox': true,
+  'searchbox': true, 'textbox': true, 'listbox': true,
+  'treeitem': true, 'menuitemcheckbox': true, 'menuitemradio': true,
+  'gridcell': true,
+};
 
-  if (children.length > 0) {
-    node.children = children;
-  }
-
-  const obj: any = {};
-  obj[id] = node;
-  return obj;
+export interface SnapshotNode {
+  type: string;
+  text?: string;
+  id?: number;
+  children?: SnapshotNode[];
 }
 
 /**
- * generateSelector - runs in browser context.
+ * Converts a snapshot node tree to indented text format.
+ * Runs in Node.js context.
+ */
+export function treeToString(nodes: SnapshotNode[], indent: number = 0): string {
+  const prefix = '  '.repeat(indent);
+  const lines: string[] = [];
+
+  for (const node of nodes) {
+    if (!node || !node.type) continue;
+
+    let line = `${prefix}- ${node.type}`;
+
+    if (node.text) {
+      line += ` "${node.text.replace(/"/g, '\\"')}"`;
+    }
+
+    if (node.id !== undefined) {
+      line += ` [id=${node.id}]`;
+    }
+
+    lines.push(line);
+
+    if (node.children && node.children.length > 0) {
+      lines.push(treeToString(node.children, indent + 1));
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Generates a full CSS selector path for an element.
+ * Runs in browser context via page.evaluate().
  */
 export function generateSelector(element: Element): string {
   if (element.id) {
@@ -102,49 +157,26 @@ export function generateSelector(element: Element): string {
   return path;
 }
 
-/**
- * Converts a tree object to YAML format.
- * Runs in Node.js context.
- */
-export function treeToYaml(obj: any, indent: number = 0): string {
-  const spaces = '  '.repeat(indent);
-  const lines: string[] = [];
+export const SNAPSHOT_FORMAT_EXPLANATION = `## Snapshot Format
 
-  if (typeof obj === 'object' && obj !== null) {
-    for (const [key, value] of Object.entries(obj)) {
-      if (!isNaN(Number(key))) {
-        lines.push(`${key}:`);
-        lines.push(treeToYaml(value, indent + 1));
-      } else if (key === 'type') {
-        lines.push(`${spaces}${key}: ${value}`);
-      } else if (key === 'text' || key === 'image_alt') {
-        lines.push(`${spaces}${key}: "${String(value).replace(/"/g, '\\"')}"`);
-      } else if (key === 'children') {
-        lines.push(`${spaces}${key}:`);
-        for (const child of (value as any[])) {
-          if (typeof child === 'object' && child !== null) {
-            for (const [childId, childObj] of Object.entries(child)) {
-              lines.push(`${spaces}  ${childId}:`);
-              lines.push(treeToYaml(childObj, indent + 2));
-            }
-          }
-        }
-      }
-    }
-  }
+Each line represents a semantic element on the page with optional text and ID:
+  - heading_1 through heading_6: Section headings
+  - text "content": Text content or paragraphs
+  - link "text" [id=N]: Clickable links
+  - button "text" [id=N]: Buttons
+  - textbox "label" [id=N]: Text input fields
+  - checkbox "label" [id=N]: Checkboxes
+  - radio "label" [id=N]: Radio buttons
+  - combobox "label" [id=N]: Select dropdowns
+  - image "alt": Images
+  - listitem: List items
+  - table / row / cell / columnheader: Table structure
+  - contentinfo: Footer sections
+  - banner: Header sections
+  - navigation: Navigation sections
 
-  return lines.join('\n');
-}
+IDs [id=N] are shown for:
+  - Interactable elements (links, buttons, inputs, checkboxes, etc.)
+  - Elements with trimmed text content (use browser_view_node for full text)
 
-/**
- * Format explanation for the YAML snapshot output.
- */
-export const SNAPSHOT_FORMAT_EXPLANATION = `## YAML Snapshot Format
-
-Each node contains:
-- \`id\`: Unique numeric identifier for the node
-- \`type\`: HTML tag name (e.g., div, p, span, button)
-- \`text\`: Text content between tags (trimmed to 200 chars, marked with "... (trimmed)" if truncated)
-- \`children\`: Child nodes in the same format
-
-The ID to CSS selector mapping is maintained in memory for referencing nodes in subsequent operations.`;
+Use these IDs with browser_click, browser_type, and browser_view_node.`;

@@ -1,6 +1,6 @@
 import type { Page } from 'puppeteer';
 import type { PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
-import { treeToYaml, SNAPSHOT_FORMAT_EXPLANATION } from './snapshot-utils.js';
+import { treeToString, SNAPSHOT_FORMAT_EXPLANATION, SKIP_TAGS, ELEMENT_TYPE_MAP, INPUT_TYPE_MAP, INTERACTABLE_TAGS, INTERACTIVE_ROLES } from './snapshot-utils.js';
 
 export interface ViewNodeResult {
   type: 'text' | 'image';
@@ -11,8 +11,13 @@ export interface BrowserToolsState {
   idToSelector: Map<number, string>;
 }
 
+const SKIP_TAGS_JS = JSON.stringify([...SKIP_TAGS]);
+const ELEMENT_TYPE_MAP_JS = JSON.stringify(ELEMENT_TYPE_MAP);
+const INPUT_TYPE_MAP_JS = JSON.stringify(INPUT_TYPE_MAP);
+const INTERACTABLE_TAGS_JS = JSON.stringify([...INTERACTABLE_TAGS]);
+const INTERACTIVE_ROLES_JS = JSON.stringify(INTERACTIVE_ROLES);
+
 export class BrowserTools {
-  private idCounter = 0;
   private idToSelector: Map<number, string> = new Map();
   private pageCounter = 0;
 
@@ -38,67 +43,70 @@ export class BrowserTools {
   }
 
   async getSnapshot(): Promise<SnapshotResult> {
-    this.idCounter = 0;
     this.idToSelector.clear();
 
-    const flattenSingleChild = this.snapshotOptions.flattenSingleChild;
     const textTrimLength = this.snapshotOptions.textTrimLength;
 
-    // Build DOM tree using string-based page.evaluate()
-    // Config values are embedded in the string since Puppeteer ignores args for string-based evaluate
-    const yamlTree = await this.page.evaluate(`
+    const result = await this.page.evaluate(`
       (function() {
-        var shouldFlatten = ${JSON.stringify(flattenSingleChild)};
         var trimLength = ${JSON.stringify(textTrimLength)};
+        var SKIP_TAGS = new Set(${SKIP_TAGS_JS});
+        var ELEMENT_TYPE_MAP = ${ELEMENT_TYPE_MAP_JS};
+        var INPUT_TYPE_MAP = ${INPUT_TYPE_MAP_JS};
+        var INTERACTABLE_TAGS = new Set(${INTERACTABLE_TAGS_JS});
+        var INTERACTIVE_ROLES = ${INTERACTIVE_ROLES_JS};
+
+        var selectorMap = {};
         var idObj = { counter: 0 };
 
-        function buildTree(el) {
-          var id = idObj.counter++;
-          var node = { type: el.tagName.toLowerCase() };
-          if (el.tagName.toLowerCase() === 'img') {
-            var alt = el.alt;
-            var src = el.src;
-            if (alt) node.image_alt = alt;
-            else if (src) {
-              var filename = src.split('/').pop().split('?')[0] || '';
-              if (filename) node.image_alt = filename;
-            }
-          }
-          var textContent = '';
+        function getDirectText(el) {
+          var text = '';
           for (var i = 0; i < el.childNodes.length; i++) {
-            var child = el.childNodes[i];
-            if (child.nodeType === Node.TEXT_NODE) textContent += child.textContent;
+            if (el.childNodes[i].nodeType === 3) text += el.childNodes[i].textContent;
           }
-          textContent = textContent.trim();
-          if (textContent) {
-            node.text = textContent.length > trimLength
-              ? textContent.substring(0, trimLength) + '... (trimmed)'
-              : textContent;
-          }
-          var children = [];
-          for (var j = 0; j < el.children.length; j++) {
-            var ch = el.children[j];
-            if (ch.tagName.toLowerCase() === 'br') continue;
-            children.push(buildTree(ch));
-          }
-          if (shouldFlatten && children.length === 1 && !node.text && !node.src) return children[0];
-          if (children.length > 0) node.children = children;
-          var obj = {};
-          obj[id] = node;
-          return obj;
+          return text.trim();
         }
-        return buildTree(document.body);
-      })()
-    `);
 
-    const yamlOutput = treeToYaml(yamlTree);
+        function trimText(text, len) {
+          if (!text || text.length <= len) return '';
+          return text.substring(0, len) + '... (trimmed)';
+        }
 
-    // Build selector map using string-based page.evaluate()
-    const selectorMap = await this.page.evaluate(`
-      (function() {
-        var shouldFlatten = ${JSON.stringify(flattenSingleChild)};
-        if (!document.body) return {};
-        function gen(el) {
+        function isInteractable(el) {
+          var tag = el.tagName.toLowerCase();
+          if (tag === 'a' && !el.hasAttribute('href')) return false;
+          if (INTERACTABLE_TAGS.has(tag)) return true;
+          var role = el.getAttribute('role');
+          if (role && INTERACTIVE_ROLES[role]) return true;
+          if (el.hasAttribute('tabindex')) return true;
+          if (el.getAttribute('contenteditable') === 'true') return true;
+          return false;
+        }
+
+        function getSemanticType(el) {
+          var tag = el.tagName.toLowerCase();
+          if (tag === 'input') {
+            var itype = (el.type || 'text').toLowerCase();
+            return INPUT_TYPE_MAP[itype] || 'textbox';
+          }
+          return ELEMENT_TYPE_MAP[tag] || null;
+        }
+
+        function getInputLabel(el) {
+          var al = el.getAttribute('aria-label');
+          if (al && al.trim()) return al.trim();
+          if (el.labels && el.labels.length > 0) {
+            var lt = el.labels[0].textContent;
+            if (lt && lt.trim()) return lt.trim();
+          }
+          var ph = el.getAttribute('placeholder');
+          if (ph && ph.trim()) return ph.trim();
+          var tt = el.getAttribute('title');
+          if (tt && tt.trim()) return tt.trim();
+          return '';
+        }
+
+        function genSelector(el) {
           if (el.id) return '#' + CSS.escape(el.id);
           var s = el.tagName.toLowerCase();
           var p = el.parentElement;
@@ -118,35 +126,129 @@ export class BrowserTools {
           }
           return path;
         }
-        function getText(el) {
-          var t = '';
-          for (var i = 0; i < el.childNodes.length; i++) { var ch = el.childNodes[i]; if (ch.nodeType === Node.TEXT_NODE) t += ch.textContent; }
-          return t.trim();
-        }
-        function getValidChildren(el) {
-          var ch = [];
-          for (var i = 0; i < el.children.length; i++) { if (el.children[i].tagName.toLowerCase() !== 'br') ch.push(el.children[i]); }
-          return ch;
-        }
-        var map = {};
-        var local = new Map();
-        function assign(el, obj) {
-          var id = obj.value++;
-          var validChildren = getValidChildren(el);
-          if (shouldFlatten && validChildren.length === 1 && !getText(el) && !el.src) {
-            assign(validChildren[0], obj);
-            return;
-          }
-          local.set(id, gen(el));
-          for (var i = 0; i < validChildren.length; i++) assign(validChildren[i], obj);
-        }
-        assign(document.body, { value: 0 });
-        local.forEach(function(v, k) { map[k] = v; });
-        return map;
-      })()
-    `) as Record<number, string>;
 
-    for (const [id, selector] of Object.entries(selectorMap)) {
+        function mergeConsecutiveTexts(nodes, parentEl) {
+          if (!nodes || nodes.length <= 1) return nodes;
+          var merged = [];
+          for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.type === 'text' && !node.children && node.id === undefined && merged.length > 0) {
+              var prev = merged[merged.length - 1];
+              if (prev.type === 'text' && !prev.children && prev.id === undefined) {
+                var combined = (prev.text || '') + ' ' + (node.text || '');
+                var trimmed = trimText(combined, trimLength);
+                prev.text = trimmed || combined;
+                if (trimmed) {
+                  prev.id = idObj.counter++;
+                  selectorMap[prev.id] = genSelector(parentEl);
+                }
+                continue;
+              }
+            }
+            merged.push(node);
+          }
+          return merged;
+        }
+
+        function processChildren(el, currentElement) {
+          var results = [];
+          for (var i = 0; i < el.childNodes.length; i++) {
+            var child = el.childNodes[i];
+            if (child.nodeType === 3) {
+              var text = child.textContent.trim();
+              if (text) {
+                var trimmed = trimText(text, trimLength);
+                var textNode = { type: 'text', text: trimmed || text };
+                if (trimmed) {
+                  textNode.id = idObj.counter++;
+                  selectorMap[textNode.id] = genSelector(currentElement);
+                }
+                results.push(textNode);
+              }
+            } else if (child.nodeType === 1 && child.tagName.toLowerCase() !== 'br') {
+              var result = buildTree(child);
+              if (result) results = results.concat(result);
+            }
+          }
+          return results.length > 0 ? mergeConsecutiveTexts(results, currentElement) : null;
+        }
+
+        function buildTree(el) {
+          var tag = el.tagName.toLowerCase();
+          if (tag === 'input' && el.type === 'hidden') return null;
+
+          if (SKIP_TAGS.has(tag)) return processChildren(el, el);
+
+          var semanticType = getSemanticType(el);
+          if (!semanticType) return processChildren(el, el);
+
+          var node = { type: semanticType };
+
+          if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+            var label = getInputLabel(el);
+            if (label) node.text = label;
+          }
+
+          var hasElementChildren = false;
+          for (var i = 0; i < el.children.length; i++) {
+            if (el.children[i].tagName.toLowerCase() !== 'br') {
+              hasElementChildren = true;
+              break;
+            }
+          }
+
+          if (!hasElementChildren) {
+            var directText = getDirectText(el);
+            var trimmedText = trimText(directText, trimLength);
+            var isTrimmed = !!trimmedText;
+
+            if (directText && !node.text) node.text = trimmedText || directText;
+
+            if (isInteractable(el) || isTrimmed) {
+              node.id = idObj.counter++;
+              selectorMap[node.id] = genSelector(el);
+            }
+
+            return [node];
+          }
+
+          if (isInteractable(el)) {
+            node.id = idObj.counter++;
+            selectorMap[node.id] = genSelector(el);
+          }
+
+          var children = [];
+          for (var i = 0; i < el.childNodes.length; i++) {
+            var child = el.childNodes[i];
+            if (child.nodeType === 3) {
+              var text = child.textContent.trim();
+              if (text) {
+                var trimmed = trimText(text, trimLength);
+                var textNode = { type: 'text', text: trimmed || text };
+                if (trimmed) {
+                  textNode.id = idObj.counter++;
+                  selectorMap[textNode.id] = genSelector(el);
+                }
+                children.push(textNode);
+              }
+            } else if (child.nodeType === 1 && child.tagName.toLowerCase() !== 'br') {
+              var result = buildTree(child);
+              if (result) children = children.concat(result);
+            }
+          }
+
+          node.children = mergeConsecutiveTexts(children, el);
+          return [node];
+        }
+
+        var tree = buildTree(document.body);
+        return { tree: tree || [], selectorMap: selectorMap };
+      })()
+    `) as { tree: any[]; selectorMap: Record<number, string> };
+
+    const yamlOutput = treeToString(result.tree);
+
+    for (const [id, selector] of Object.entries(result.selectorMap)) {
       this.idToSelector.set(Number(id), selector);
     }
 
@@ -158,38 +260,22 @@ export class BrowserTools {
   }
 
   async viewNode(nodeId: number): Promise<ViewNodeResult> {
-    const shouldFlatten = this.snapshotOptions.flattenSingleChild;
+    const selector = this.idToSelector.get(nodeId);
+    if (!selector) {
+      return { type: 'text', content: `Node with ID ${nodeId} not found` };
+    }
+
     const result = await this.page.evaluate(`
       (function() {
-        var id = ${JSON.stringify(nodeId)};
-        var shouldFlatten = ${JSON.stringify(shouldFlatten)};
-        if (!document.body) return { type: 'text', text: 'Node with ID ' + id + ' not found' };
-        function getText(el) {
-          var t = '';
-          for (var i = 0; i < el.childNodes.length; i++) { var ch = el.childNodes[i]; if (ch.nodeType === Node.TEXT_NODE) t += ch.textContent; }
-          return t.trim();
+        var sel = ${JSON.stringify(selector)};
+        var el = document.querySelector(sel);
+        if (!el) return { type: 'text', text: 'Element not found' };
+        if (el.tagName.toLowerCase() === 'img') {
+          var src = el.src;
+          if (src) return { type: 'image', src: src };
+          return { type: 'text', text: 'Image (no source)' };
         }
-        function getValidChildren(el) {
-          var ch = [];
-          for (var i = 0; i < el.children.length; i++) { if (el.children[i].tagName.toLowerCase() !== 'br') ch.push(el.children[i]); }
-          return ch;
-        }
-        function traverse(el, obj, target) {
-          var cid = obj.counter++;
-          var validChildren = getValidChildren(el);
-          if (shouldFlatten && validChildren.length === 1 && !getText(el) && !el.src) {
-            if (cid === target) return el;
-            return traverse(validChildren[0], obj, target);
-          }
-          if (cid === target) return el;
-          for (var i = 0; i < validChildren.length; i++) { var f = traverse(validChildren[i], obj, target); if (f) return f; }
-          return null;
-        }
-        var el = traverse(document.body, { counter: 0 }, id);
-        if (!el) return { type: 'text', text: 'Node with ID ' + id + ' not found' };
-        if (el.tagName.toLowerCase() === 'img') { var src = el.src; if (src) return { type: 'image', src: src }; }
-        var t = '';
-        for (var i = 0; i < el.childNodes.length; i++) { var c = el.childNodes[i]; if (c.nodeType === Node.TEXT_NODE) t += c.textContent; }
+        var t = el.textContent || '';
         t = t.trim();
         return t ? { type: 'text', text: t } : { type: 'text', text: '(no text content)' };
       })()
@@ -208,57 +294,7 @@ export class BrowserTools {
   }
 
   async getSelectorByNodeId(nodeId: number): Promise<string | null> {
-    const cached = this.idToSelector.get(nodeId);
-    if (cached) return cached;
-
-    const shouldFlatten = this.snapshotOptions.flattenSingleChild;
-    return await this.page.evaluate(`
-      (function() {
-        var id = ${JSON.stringify(nodeId)};
-        var shouldFlatten = ${JSON.stringify(shouldFlatten)};
-        if (!document.body) return null;
-        function getText(el) {
-          var t = '';
-          for (var i = 0; i < el.childNodes.length; i++) { var ch = el.childNodes[i]; if (ch.nodeType === Node.TEXT_NODE) t += ch.textContent; }
-          return t.trim();
-        }
-        function getValidChildren(el) {
-          var ch = [];
-          for (var i = 0; i < el.children.length; i++) { if (el.children[i].tagName.toLowerCase() !== 'br') ch.push(el.children[i]); }
-          return ch;
-        }
-        function traverse(el, obj) {
-          var cid = obj.counter++;
-          var validChildren = getValidChildren(el);
-          if (shouldFlatten && validChildren.length === 1 && !getText(el) && !el.src) {
-            if (cid === id) return el;
-            return traverse(validChildren[0], obj);
-          }
-          if (cid === id) return el;
-          for (var i = 0; i < validChildren.length; i++) { var f = traverse(validChildren[i], obj); if (f) return f; }
-          return null;
-        }
-        function gen(el) {
-          if (el.id) return '#' + CSS.escape(el.id);
-          var s = el.tagName.toLowerCase();
-          var p = el.parentElement;
-          if (p) { var sibs = Array.from(p.children).filter(function(c) { return c.tagName === el.tagName; }); if (sibs.length > 1) s += ':nth-of-type(' + (sibs.indexOf(el) + 1) + ')'; }
-          var path = s;
-          var c = el.parentElement;
-          while (c && c !== document.body) {
-            var t = c.tagName.toLowerCase();
-            if (c.id) { path = '#' + CSS.escape(c.id) + ' > ' + path; break; }
-            var ps = Array.from(c.parentElement ? c.parentElement.children : []).filter(function(x) { return x.tagName === c.tagName; });
-            if (ps.length > 1) path = t + ':nth-of-type(' + (ps.indexOf(c) + 1) + ') > ' + path;
-            else path = t + ' > ' + path;
-            c = c.parentElement;
-          }
-          return path;
-        }
-        var el = traverse(document.body, { counter: 0 });
-        return el ? gen(el) : null;
-      })()
-    `) as Promise<string | null>;
+    return this.idToSelector.get(nodeId) || null;
   }
 
   async click(selector: string): Promise<void> {

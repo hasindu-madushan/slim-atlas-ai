@@ -76,7 +76,7 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_snapshot',
-            description: 'Get YAML snapshot of the current page DOM tree with unique IDs',
+            description: 'Get a semantic snapshot of the current page with unique IDs for interactable and trimmed-text elements. Use node IDs for browser_click, browser_type, and browser_view_node.',
             inputSchema: {
               type: 'object',
               properties: {
