@@ -2,6 +2,7 @@ import { LightpandaPool } from './pool.js';
 import { ChromePool } from './chrome-pool.js';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
+import { SessionHistory } from './history.js';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
@@ -17,6 +18,7 @@ interface SessionState {
   chromeSlotId?: string;
   manager: ChromeManager | null;
   lastActiveTime: number;
+  history: SessionHistory;
 }
 
 export class SessionManager {
@@ -50,6 +52,7 @@ export class SessionManager {
       queue: Promise.resolve(),
       manager: null,
       lastActiveTime: Date.now(),
+      history: new SessionHistory(),
     };
 
     log.info(sessionId, `New session, browser=${state.browserType}`);
@@ -96,18 +99,15 @@ export class SessionManager {
     state.preferChrome = true;
     state.browserType = 'chrome';
 
-    // Preserve snapshot state (id -> selector mapping) across browser escalation
-    const snapshotState = state.manager?.getState();
-
     if (state.lpInstanceId) {
       await this.detachLightpanda(sessionId, state);
     }
 
     await this.attachChrome(sessionId, state);
 
-    if (snapshotState && state.manager) {
-      state.manager.setState(snapshotState);
-      log.debug(sessionId, `Restored snapshot state after switching to Chrome`);
+    if (state.manager) {
+      await state.history.replay(state.manager, sessionId);
+      log.debug(sessionId, `Replayed history after switching to Chrome`);
     }
   }
 
@@ -196,6 +196,10 @@ export class SessionManager {
 
   getManager(sessionId: string): ChromeManager | null {
     return this.sessions.get(sessionId)?.manager ?? null;
+  }
+
+  getHistory(sessionId: string): SessionHistory | null {
+    return this.sessions.get(sessionId)?.history ?? null;
   }
 
   getBrowserType(sessionId: string): BrowserType | null {

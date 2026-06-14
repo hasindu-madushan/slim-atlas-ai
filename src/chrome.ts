@@ -5,7 +5,7 @@ import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } fro
 import { BrowserTools, type BrowserToolsState, type ViewNodeResult } from './browser-tools.js';
 import { getAntiDetectionArgs, applyStealthToPage, isStealthEnabled } from './stealth.js';
 
-const DEFAULT_WAIT_UNTIL = (process.env.NAVIGATE_WAIT_UNTIL || 'load') as NavigateOptions['waitUntil'];
+const DEFAULT_WAIT_UNTIL = (process.env.NAVIGATE_WAIT_UNTIL || 'domcontentloaded') as NavigateOptions['waitUntil'];
 const DEFAULT_NAVIGATE_TIMEOUT = parseInt(process.env.NAVIGATE_TIMEOUT || '30000', 10);
 
 puppeteer.use(StealthPlugin());
