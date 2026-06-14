@@ -1,6 +1,14 @@
-import puppeteer, { Browser, Page, BrowserContext } from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { Browser, Page, BrowserContext } from 'puppeteer';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 import { BrowserTools, type BrowserToolsState, type ViewNodeResult } from './browser-tools.js';
+import { getAntiDetectionArgs, applyStealthToPage, isStealthEnabled } from './stealth.js';
+
+const DEFAULT_WAIT_UNTIL = (process.env.NAVIGATE_WAIT_UNTIL || 'load') as NavigateOptions['waitUntil'];
+const DEFAULT_NAVIGATE_TIMEOUT = parseInt(process.env.NAVIGATE_TIMEOUT || '30000', 10);
+
+puppeteer.use(StealthPlugin());
 
 const CHROME_LAUNCH_ARGS = [
   '--no-sandbox',
@@ -14,6 +22,7 @@ const CHROME_LAUNCH_ARGS = [
   '--disable-translate',
   '--metrics-recording-only',
   '--mute-audio',
+  ...getAntiDetectionArgs(),
 ];
 
 export class ChromeManager {
@@ -46,10 +55,11 @@ export class ChromeManager {
     if (this.browser && this.browser.connected) return;
     await this.close();
 
-    this.browser = await puppeteer.launch({ headless: true as any, args: CHROME_LAUNCH_ARGS });
+    this.browser = await puppeteer.launch({ headless: true as any, args: CHROME_LAUNCH_ARGS, protocolTimeout: 30000 });
     this.ownedBrowser = true;
     this.context = await this.browser.createBrowserContext();
     this.page = await this.context.newPage();
+    await applyStealthToPage(this.page);
   }
 
   async close(): Promise<void> {
@@ -99,7 +109,7 @@ export class ChromeManager {
   // Browser lifecycle operations (not part of common BrowserTools)
   async navigate(options: NavigateOptions): Promise<void> {
     const page = this.getPage();
-    await page.goto(options.url, { waitUntil: options.waitUntil || 'load', timeout: 300000 });
+    await page.goto(options.url, { waitUntil: options.waitUntil || DEFAULT_WAIT_UNTIL, timeout: DEFAULT_NAVIGATE_TIMEOUT });
   }
 
   // Common tool operations delegated to BrowserTools

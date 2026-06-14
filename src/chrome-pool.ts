@@ -1,7 +1,12 @@
-import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { Browser, BrowserContext, Page } from 'puppeteer';
 import { exec } from 'child_process';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
+import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
+
+puppeteer.use(StealthPlugin());
 
 const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
 
@@ -34,11 +39,13 @@ export class ChromePool {
     log.info('chrome-pool', 'Launching Chrome browser');
     this.browser = await puppeteer.launch({
       headless: true as any,
+      protocolTimeout: 30000,
       args: [
         '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
         '--no-first-run', '--disable-extensions', '--disable-background-networking',
         '--disable-default-apps', '--disable-sync', '--disable-translate',
         '--metrics-recording-only', '--mute-audio',
+        ...getAntiDetectionArgs(),
       ],
     });
 
@@ -120,6 +127,7 @@ export class ChromePool {
     const browser = await this.ensureBrowser();
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
+    await applyStealthToPage(page);
     const id = `chrome-ctx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('chrome-pool', `Created slot ${id}`);
     const manager = new ChromeManager({ browser, context, page });

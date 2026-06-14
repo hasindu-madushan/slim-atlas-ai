@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { log } from './logger.js';
+import { applyLightpandaStealth } from './stealth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -141,7 +142,7 @@ export class LightpandaPool {
 
     log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
     const proc = spawn(lightpandaPath, [
-      'serve', '--obey_robots', '--log_level', 'warn',
+      'serve', '--log_level', 'warn',
       '--host', '127.0.0.1', '--port', port.toString(), '--timeout', '86400',
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -158,7 +159,7 @@ export class LightpandaPool {
     let browser: any = null;
     for (let i = 0; i < 15; i++) {
       try {
-        browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
+        browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint, protocolTimeout: 30000 });
         log.info('pool', `${id} connected`);
         break;
       } catch (e) {
@@ -173,6 +174,11 @@ export class LightpandaPool {
 
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
+    try {
+      await applyLightpandaStealth(page);
+    } catch (e) {
+      log.warn('pool', `${id} stealth setup failed: ${(e as Error).message}`);
+    }
 
     return { id, port, process: proc, browser, context, page, ready: true };
   }

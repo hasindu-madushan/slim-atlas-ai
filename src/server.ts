@@ -9,6 +9,7 @@ import { log } from './logger.js';
 import type { ChromeManager } from './chrome.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
+const DEFAULT_WAIT_UNTIL = process.env.NAVIGATE_WAIT_UNTIL || 'load';
 
 const SESSION_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -60,7 +61,7 @@ export class PuppeteerMCPServer {
         tools: [
           {
             name: 'browser_navigate',
-            description: 'Navigate to a URL. Provide session_id to reuse an existing session, or omit to create a new one.',
+            description: 'Navigate to a URL. Provide session_id to reuse an existing session, or omit to create a new one. Set use_chrome=true to force Chrome (better for bot detection evasion).',
             inputSchema: {
               type: 'object',
               properties: {
@@ -70,8 +71,9 @@ export class PuppeteerMCPServer {
                   type: 'string',
                   enum: ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
                   description: 'When to consider navigation finished',
-                  default: 'networkidle0',
+                  default: 'load',
                 },
+                use_chrome: { type: 'boolean', description: 'Force Chrome instead of Lightpanda. Recommended for sites with bot detection (Cloudflare, CAPTCHA).', default: false },
               },
               required: ['url'],
             },
@@ -256,10 +258,10 @@ export class PuppeteerMCPServer {
     const useChrome = args.use_chrome === true;
     log.info(sessionId, `Executing ${toolName}`);
 
-    if (!this.sessionManager.has(sessionId)) {
+    const isNewSession = !this.sessionManager.has(sessionId);
+    if (isNewSession) {
       log.info(sessionId, `New session, acquiring browser (chrome=${useChrome})`);
       await this.sessionManager.acquire(sessionId, useChrome || this.sessionManager.shouldPreferChrome(sessionId));
-      await this.sessionManager.logResourceUsage();
     } else if (useChrome && CHROME_ENABLED && this.sessionManager.getBrowserType(sessionId) !== 'chrome') {
       log.info(sessionId, `Switching to Chrome`);
       await this.sessionManager.acquire(sessionId, true);
@@ -272,6 +274,9 @@ export class PuppeteerMCPServer {
 
     try {
       const result = await this.executeWithManager(sessionId, manager, toolName, args);
+      if (isNewSession) {
+        await this.sessionManager.logResourceUsage();
+      }
       log.info(sessionId, `${toolName} completed`);
       this.sessionManager.touchSession(sessionId);
       return result;
@@ -299,10 +304,49 @@ export class PuppeteerMCPServer {
     log.debug(sessionId, `${toolName} args: ${JSON.stringify(args)}`);
 
     switch (toolName) {
-      case 'browser_navigate':
-        await manager.navigate({ url: args.url, waitUntil: args.waitUntil || 'load' });
+      case 'browser_navigate': {
+        try {
+          await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
+        } catch (navError: any) {
+          const msg = (navError?.message || '').toLowerCase();
+          if (msg.includes('timeout') && browserType === 'lightpanda' && CHROME_ENABLED) {
+            log.warn(sessionId, `Navigation timeout on Lightpanda, switching to Chrome`);
+            this.sessionManager.markPreferChrome(sessionId);
+            manager = await this.sessionManager.acquire(sessionId, true);
+            await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
+          } else {
+            throw navError;
+          }
+        }
+
+        if (browserType === 'lightpanda' && CHROME_ENABLED && !args.use_chrome) {
+          const isBlocked = await manager.getPage().evaluate(() => {
+            const title = document.title.toLowerCase();
+            const bodyText = document.body.innerText.toLowerCase();
+            const html = document.documentElement.innerHTML.toLowerCase();
+            return (
+              title.includes('access denied') ||
+              title.includes('captcha') ||
+              title.includes('cloudflare') ||
+              bodyText.includes('checking your browser') ||
+              bodyText.includes('ddos protection') ||
+              bodyText.includes('access denied') ||
+              html.includes('cf-ray') ||
+              html.includes('cf-chl-bypass')
+            );
+          });
+
+          if (isBlocked) {
+            log.warn(sessionId, `Bot detection triggered on Lightpanda, switching to Chrome`);
+            this.sessionManager.markPreferChrome(sessionId);
+            manager = await this.sessionManager.acquire(sessionId, true);
+            await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
+          }
+        }
+        
         const info = await manager.getPageInfo();
-        return { content: [{ type: 'text', text: `${prefix}\nresult: [${browserType}] Navigated to ${info.url}. Title: ${info.title}` }] };
+        return { content: [{ type: 'text', text: `${prefix}\nresult: [${this.sessionManager.getBrowserType(sessionId)}] Navigated to ${info.url}. Title: ${info.title}` }] };
+      }
 
       case 'browser_snapshot': {
         const snapshot = await manager.getSnapshot();

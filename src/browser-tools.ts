@@ -1,6 +1,7 @@
 import type { Page } from 'puppeteer';
 import type { PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 import { treeToString, SNAPSHOT_FORMAT_EXPLANATION, SKIP_TAGS, ELEMENT_TYPE_MAP, INPUT_TYPE_MAP, INTERACTABLE_TAGS, INTERACTIVE_ROLES } from './snapshot-utils.js';
+import { isHumanDelaysEnabled, getRandomTypingDelay, getRandomClickDelay } from './stealth.js';
 
 export interface ViewNodeResult {
   type: 'text' | 'image';
@@ -298,6 +299,9 @@ export class BrowserTools {
   }
 
   async click(selector: string): Promise<void> {
+    if (isHumanDelaysEnabled()) {
+      await new Promise(r => setTimeout(r, getRandomClickDelay()));
+    }
     try {
       await this.page.click(selector);
     } catch (err: any) {
@@ -319,13 +323,15 @@ export class BrowserTools {
   }
 
   async type(selector: string, text: string, options: { delay?: number } = {}): Promise<void> {
-    await this.page.type(selector, text, { delay: options.delay ?? 0 });
+    const delay = options.delay ?? (isHumanDelaysEnabled() ? getRandomTypingDelay() : 0);
+    await this.page.type(selector, text, { delay });
   }
 
   async fill(selector: string, value: string): Promise<void> {
     await this.page.focus(selector);
     await this.page.evaluate(`(function() { var sel = ${JSON.stringify(selector)}; var el = document.querySelector(sel); if (el) el.value = ''; })()`);
-    await this.page.type(selector, value);
+    const delay = isHumanDelaysEnabled() ? getRandomTypingDelay() : 0;
+    await this.page.type(selector, value, { delay });
   }
 
   async evaluate(script: string): Promise<any> {

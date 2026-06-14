@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "puppeteer": "^23.0.0"
+    "puppeteer": "^23.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
     "tsx": "^4.0.0",
@@ -23,6 +25,12 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": ["mcp", "lightpanda", "browser", "automation", "model-context-protocol"],
+  "keywords": [
+    "mcp",
+    "lightpanda",
+    "browser",
+    "automation",
+    "model-context-protocol"
+  ],
   "license": "MIT"
 }
