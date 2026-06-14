@@ -177,6 +177,7 @@ export class BrowserTools {
         function buildTree(el) {
           var tag = el.tagName.toLowerCase();
           if (tag === 'input' && el.type === 'hidden') return null;
+          if (tag === 'script' || tag === 'style' || tag === 'noscript') return null;
 
           if (SKIP_TAGS.has(tag)) return processChildren(el, el);
 
@@ -188,6 +189,11 @@ export class BrowserTools {
           if (tag === 'input' || tag === 'textarea' || tag === 'select') {
             var label = getInputLabel(el);
             if (label) node.text = label;
+          }
+
+          if (tag === 'a') {
+            var href = el.getAttribute('href');
+            if (href) node.url = href;
           }
 
           var hasElementChildren = false;
@@ -242,7 +248,7 @@ export class BrowserTools {
           return [node];
         }
 
-        var tree = buildTree(document.body);
+        var tree = document.body ? buildTree(document.body) : null;
         return { tree: tree || [], selectorMap: selectorMap };
       })()
     `) as { tree: any[]; selectorMap: Record<number, string> };

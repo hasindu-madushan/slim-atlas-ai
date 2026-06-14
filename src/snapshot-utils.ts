@@ -79,6 +79,7 @@ export interface SnapshotNode {
   type: string;
   text?: string;
   id?: number;
+  url?: string;
   children?: SnapshotNode[];
 }
 
@@ -99,8 +100,15 @@ export function treeToString(nodes: SnapshotNode[], indent: number = 0): string 
       line += ` "${node.text.replace(/"/g, '\\"')}"`;
     }
 
+    const attrs: string[] = [];
     if (node.id !== undefined) {
-      line += ` [id=${node.id}]`;
+      attrs.push(`id=${node.id}`);
+    }
+    if (node.url) {
+      attrs.push(`url=${node.url}`);
+    }
+    if (attrs.length > 0) {
+      line += ` [${attrs.join(', ')}]`;
     }
 
     lines.push(line);
@@ -178,5 +186,6 @@ Each line represents a semantic element on the page with optional text and ID:
 IDs [id=N] are shown for:
   - Interactable elements (links, buttons, inputs, checkboxes, etc.)
   - Elements with trimmed text content (use browser_view_node for full text)
+  - Links also include [url=...] showing the href value
 
 Use these IDs with browser_click, browser_type, and browser_view_node.`;
