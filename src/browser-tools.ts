@@ -274,6 +274,8 @@ export class BrowserTools {
               selectorMap[node.id] = genSelector(el);
             }
 
+            if (!node.text && node.id === undefined) return null;
+
             return [node];
           }
 
@@ -303,6 +305,36 @@ export class BrowserTools {
           }
 
           node.children = mergeConsecutiveTexts(children, el);
+
+          if (node.type === 'text' && node.children && node.children.length > 0) {
+            var allTextChildren = true;
+            for (var ti = 0; ti < node.children.length; ti++) {
+              if (node.children[ti].type !== 'text') { allTextChildren = false; break; }
+            }
+            if (allTextChildren) {
+              var parts = [];
+              var inheritedId = undefined;
+              for (var tj = 0; tj < node.children.length; tj++) {
+                var cc = node.children[tj];
+                if (cc.text) parts.push(cc.text);
+                if (cc.id !== undefined && inheritedId === undefined) inheritedId = cc.id;
+              }
+              if (parts.length > 0) {
+                var merged = parts.join(' ');
+                var mergedTrimmed = trimText(merged, trimLength);
+                node.text = mergedTrimmed || merged;
+                if (mergedTrimmed && inheritedId !== undefined) node.id = inheritedId;
+                node.children = undefined;
+              }
+            } else if (!node.text && node.id === undefined) {
+              return node.children;
+            }
+          }
+
+          if (!node.text && node.id === undefined && (!node.children || node.children.length === 0)) {
+            return null;
+          }
+
           return [node];
         }
 
