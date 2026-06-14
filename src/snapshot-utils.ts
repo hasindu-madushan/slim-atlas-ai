@@ -80,6 +80,7 @@ export interface SnapshotNode {
   text?: string;
   id?: number;
   url?: string;
+  urlTrimmed?: boolean;
   children?: SnapshotNode[];
 }
 
@@ -186,6 +187,6 @@ Each line represents a semantic element on the page with optional text and ID:
 IDs [id=N] are shown for:
   - Interactable elements (links, buttons, inputs, checkboxes, etc.)
   - Elements with trimmed text content (use browser_view_node for full text)
-  - Links also include [url=...] showing the href value
+  - Links also include [url=...] showing the absolute href. Long URLs are trimmed with "...(trimmed)"; use browser_view_node to retrieve the full URL.
 
 Use these IDs with browser_click, browser_type, and browser_view_node.`;

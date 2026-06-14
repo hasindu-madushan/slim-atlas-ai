@@ -10,6 +10,7 @@ export interface ViewNodeResult {
 
 export interface BrowserToolsState {
   idToSelector: Map<number, string>;
+  idToUrl: Map<number, string>;
 }
 
 const SKIP_TAGS_JS = JSON.stringify([...SKIP_TAGS]);
@@ -20,6 +21,7 @@ const INTERACTIVE_ROLES_JS = JSON.stringify(INTERACTIVE_ROLES);
 
 export class BrowserTools {
   private idToSelector: Map<number, string> = new Map();
+  private idToUrl: Map<number, string> = new Map();
   private pageCounter = 0;
 
   constructor(
@@ -28,11 +30,12 @@ export class BrowserTools {
   ) {}
 
   getState(): BrowserToolsState {
-    return { idToSelector: new Map(this.idToSelector) };
+    return { idToSelector: new Map(this.idToSelector), idToUrl: new Map(this.idToUrl) };
   }
 
   setState(state: BrowserToolsState): void {
     this.idToSelector = new Map(state.idToSelector);
+    this.idToUrl = new Map(state.idToUrl || []);
   }
 
   async getPageInfo(): Promise<PageInfo> {
@@ -45,6 +48,7 @@ export class BrowserTools {
 
   async getSnapshot(): Promise<SnapshotResult> {
     this.idToSelector.clear();
+    this.idToUrl.clear();
 
     const textTrimLength = this.snapshotOptions.textTrimLength;
 
@@ -58,14 +62,20 @@ export class BrowserTools {
         var INTERACTIVE_ROLES = ${INTERACTIVE_ROLES_JS};
 
         var selectorMap = {};
+        var urlMap = {};
         var idObj = { counter: 0 };
+
+        function normalizeText(text) {
+          if (!text) return '';
+          return text.replace(/\\s+/g, ' ').trim();
+        }
 
         function getDirectText(el) {
           var text = '';
           for (var i = 0; i < el.childNodes.length; i++) {
             if (el.childNodes[i].nodeType === 3) text += el.childNodes[i].textContent;
           }
-          return text.trim();
+          return normalizeText(text);
         }
 
         function trimText(text, len) {
@@ -156,7 +166,7 @@ export class BrowserTools {
           for (var i = 0; i < el.childNodes.length; i++) {
             var child = el.childNodes[i];
             if (child.nodeType === 3) {
-              var text = child.textContent.trim();
+              var text = normalizeText(child.textContent);
               if (text) {
                 var trimmed = trimText(text, trimLength);
                 var textNode = { type: 'text', text: trimmed || text };
@@ -193,7 +203,55 @@ export class BrowserTools {
 
           if (tag === 'a') {
             var href = el.getAttribute('href');
-            if (href) node.url = href;
+            if (href) {
+              var absoluteUrl;
+              try {
+                absoluteUrl = new URL(href, document.baseURI).href;
+              } catch (e) {
+                absoluteUrl = href;
+              }
+              urlMap[idObj.counter] = absoluteUrl;
+              var urlTrimmed = trimText(absoluteUrl, trimLength);
+              node.url = urlTrimmed || absoluteUrl;
+              if (urlTrimmed) node.urlTrimmed = true;
+            }
+            var linkText = '';
+            var al = el.getAttribute('aria-label');
+            if (al && normalizeText(al)) linkText = normalizeText(al);
+            if (!linkText) {
+              var tt = el.getAttribute('title');
+              if (tt && normalizeText(tt)) linkText = normalizeText(tt);
+            }
+            if (!linkText) {
+              var heading = el.querySelector('h1, h2, h3, h4, h5, h6');
+              if (heading) linkText = normalizeText(heading.textContent);
+            }
+            if (!linkText) {
+              var headlineEl = el.querySelector('[class*="eadline" i], [class*="itle" i], [class*="abel" i]');
+              if (headlineEl) linkText = normalizeText(headlineEl.textContent);
+            }
+            if (!linkText) {
+              for (var ci = 0; ci < el.childNodes.length; ci++) {
+                var c = el.childNodes[ci];
+                if (c.nodeType === 3) {
+                  var dt = normalizeText(c.textContent);
+                  if (dt) { linkText = dt; break; }
+                } else if (c.nodeType === 1) {
+                  var ct = normalizeText(c.textContent);
+                  if (ct) { linkText = ct; break; }
+                }
+              }
+            }
+            if (!linkText) linkText = normalizeText(el.textContent);
+            if (linkText) {
+              var linkTrimmed = trimText(linkText, trimLength);
+              node.text = linkTrimmed || linkText;
+              if (!node.id) {
+                node.id = idObj.counter++;
+                selectorMap[node.id] = genSelector(el);
+              }
+              return [node];
+            }
           }
 
           var hasElementChildren = false;
@@ -228,7 +286,7 @@ export class BrowserTools {
           for (var i = 0; i < el.childNodes.length; i++) {
             var child = el.childNodes[i];
             if (child.nodeType === 3) {
-              var text = child.textContent.trim();
+              var text = normalizeText(child.textContent);
               if (text) {
                 var trimmed = trimText(text, trimLength);
                 var textNode = { type: 'text', text: trimmed || text };
@@ -249,14 +307,19 @@ export class BrowserTools {
         }
 
         var tree = document.body ? buildTree(document.body) : null;
-        return { tree: tree || [], selectorMap: selectorMap };
+        return { tree: tree || [], selectorMap: selectorMap, urlMap: urlMap };
       })()
-    `) as { tree: any[]; selectorMap: Record<number, string> };
+    `) as { tree: any[]; selectorMap: Record<number, string>; urlMap: Record<number, string> };
 
     const yamlOutput = treeToString(result.tree);
 
+    this.idToSelector.clear();
+    this.idToUrl.clear();
     for (const [id, selector] of Object.entries(result.selectorMap)) {
       this.idToSelector.set(Number(id), selector);
+    }
+    for (const [id, url] of Object.entries(result.urlMap || {})) {
+      this.idToUrl.set(Number(id), url);
     }
 
     return {
@@ -270,6 +333,11 @@ export class BrowserTools {
     const selector = this.idToSelector.get(nodeId);
     if (!selector) {
       return { type: 'text', content: `Node with ID ${nodeId} not found` };
+    }
+
+    const cachedUrl = this.idToUrl.get(nodeId);
+    if (cachedUrl) {
+      return { type: 'text', content: cachedUrl };
     }
 
     const result = await this.page.evaluate(`
