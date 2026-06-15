@@ -81,7 +81,7 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_snapshot',
-            description: 'Get a semantic snapshot of the current page with unique IDs for interactable and trimmed-text elements. Links include absolute [url=...] attributes; long URLs are trimmed with "...(trimmed)". Use node IDs with browser_click, browser_type, and browser_view_node (view_node returns the full URL for link nodes).',
+            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id@url` where #N is the node id and @URL is the link\'s absolute href. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. Use ids with browser_click, browser_type, browser_view_node.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -92,7 +92,7 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_view_node',
-            description: 'View a specific node by ID. Returns full text content, the original (untrimmed) URL for link nodes, or the image.',
+            description: 'View a node by id from a snapshot. Returns the full text content, the full untrimmed URL for link nodes, or the image.',
             inputSchema: {
               type: 'object',
               properties: {

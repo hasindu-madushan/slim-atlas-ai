@@ -355,7 +355,7 @@ export class BrowserTools {
     }
 
     return {
-      accessibilityTree: `${SNAPSHOT_FORMAT_EXPLANATION}\n\n---\n\n${yamlOutput}`,
+      accessibilityTree: `${SNAPSHOT_FORMAT_EXPLANATION}\n\n${yamlOutput}`,
       url: this.page.url(),
       title: await this.page.title(),
     };

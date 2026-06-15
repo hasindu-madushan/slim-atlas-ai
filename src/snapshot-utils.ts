@@ -18,7 +18,7 @@ export const SKIP_TAGS = new Set([
   'map', 'area', 'canvas', 'audio', 'video',
   'head', 'title', 'meta', 'link', 'base',
   'meter', 'progress', 'output',
-  'ul', 'ol',
+  'ul', 'ol', 'li',
   'body',
 ]);
 
@@ -84,6 +84,34 @@ export interface SnapshotNode {
   children?: SnapshotNode[];
 }
 
+const STRUCTURAL_TYPES = new Set([
+  'list', 'table', 'row',
+  'contentinfo', 'banner', 'navigation',
+  'form', 'group', 'dialog',
+]);
+
+function hasUsefulDescendant(node: SnapshotNode): boolean {
+  if (node.id !== undefined) return true;
+  if (node.text) return true;
+  if (!STRUCTURAL_TYPES.has(node.type)) return true;
+  if (!node.children) return false;
+  for (const child of node.children) {
+    if (hasUsefulDescendant(child)) return true;
+  }
+  return false;
+}
+
+function shouldSkipStructural(node: SnapshotNode): boolean {
+  if (!STRUCTURAL_TYPES.has(node.type)) return false;
+  if (node.id !== undefined) return false;
+  if (node.text) return false;
+  if (!node.children || node.children.length === 0) return true;
+  for (const child of node.children) {
+    if (hasUsefulDescendant(child)) return false;
+  }
+  return true;
+}
+
 /**
  * Converts a snapshot node tree to indented text format.
  * Runs in Node.js context.
@@ -94,6 +122,8 @@ export function treeToString(nodes: SnapshotNode[], indent: number = 0): string 
 
   for (const node of nodes) {
     if (!node || !node.type) continue;
+    if (node.type === 'link' && !node.text && !node.url) continue;
+    if (shouldSkipStructural(node)) continue;
 
     let line = `${prefix}- ${node.type}`;
 
@@ -101,15 +131,11 @@ export function treeToString(nodes: SnapshotNode[], indent: number = 0): string 
       line += ` "${node.text.replace(/"/g, '\\"')}"`;
     }
 
-    const attrs: string[] = [];
     if (node.id !== undefined) {
-      attrs.push(`id=${node.id}`);
+      line += ` #${node.id}`;
     }
     if (node.url) {
-      attrs.push(`url=${node.url}`);
-    }
-    if (attrs.length > 0) {
-      line += ` [${attrs.join(', ')}]`;
+      line += `@${node.url}`;
     }
 
     lines.push(line);
@@ -166,27 +192,4 @@ export function generateSelector(element: Element): string {
   return path;
 }
 
-export const SNAPSHOT_FORMAT_EXPLANATION = `## Snapshot Format
-
-Each line represents a semantic element on the page with optional text and ID:
-  - heading_1 through heading_6: Section headings
-  - text "content": Text content or paragraphs
-  - link "text" [id=N]: Clickable links
-  - button "text" [id=N]: Buttons
-  - textbox "label" [id=N]: Text input fields
-  - checkbox "label" [id=N]: Checkboxes
-  - radio "label" [id=N]: Radio buttons
-  - combobox "label" [id=N]: Select dropdowns
-  - image "alt": Images
-  - listitem: List items
-  - table / row / cell / columnheader: Table structure
-  - contentinfo: Footer sections
-  - banner: Header sections
-  - navigation: Navigation sections
-
-IDs [id=N] are shown for:
-  - Interactable elements (links, buttons, inputs, checkboxes, etc.)
-  - Elements with trimmed text content (use browser_view_node for full text)
-  - Links also include [url=...] showing the absolute href. Long URLs are trimmed with "...(trimmed)"; use browser_view_node to retrieve the full URL.
-
-Use these IDs with browser_click, browser_type, and browser_view_node.`;
+export const SNAPSHOT_FORMAT_EXPLANATION = `## Format: heading_1-6 | text "x" | link "x" | button "x" | textbox/combobox/checkbox/radio/spinbutton/slider/option | image | list/listitem/row/cell/columnheader/table | contentinfo/banner/navigation/form/group/dialog/label; attrs use #N for id, @URL for url; long values end "... (trimmed)"; use browser_view_node for full content.`;
