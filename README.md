@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Works with <strong>macOS</strong>, <strong>Linux</strong>, and <strong>Windows</strong>.
+  Works with <strong>macOS</strong> and <strong>Linux</strong>.
 </p>
 
 <p align="center">
@@ -19,13 +19,14 @@
 ## Features
 
 - **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
-- **Page Snapshots**: Get YAML accessibility tree snapshots with unique node IDs for precise element targeting
+- **Page Snapshots**: Get compact YAML accessibility tree snapshots with unique node IDs for precise element targeting
+- **LLM-Optimized Context**: Snapshots are stripped to semantic essentials, keeping context usage tiny so you can fit more pages and longer sessions into the same window
 - **Node Inspection**: View specific nodes by ID to inspect text content or images
 - **History Navigation**: Go back, go forward, and reload pages
 - **Lightweight by Default**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
 - **Automatic Chrome Fallback**: If Lightpanda crashes or fails, automatically switches to Chrome for reliability
 - **Session Management**: Reuse sessions across multiple operations with unique session IDs
-- **Cross-Platform**: Works on macOS, Linux (Lightpanda), and Windows (Chrome fallback)
+- **Cross-Platform**: Works on macOS and Linux (Lightpanda), with automatic Chrome fallback when needed
 
 ## Installation
 
@@ -47,7 +48,7 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
 ```
 
-**Windows / Chrome Fallback**: On Windows, Lightpanda is not available. The server automatically falls back to Chrome (via Puppeteer). This also works as a fallback on macOS/Linux if Lightpanda fails. Ensure Chrome/Chromium is installed, or let Puppeteer download it automatically.
+**Chrome Fallback**: If Lightpanda crashes or a page triggers bot detection, the server automatically switches to Chrome (via Puppeteer) for that session. Chrome/Chromium can be installed locally, or Puppeteer can download it automatically.
 
 ## Usage
 
@@ -127,7 +128,7 @@ npx vitest
 ## Requirements
 
 - Node.js 18+
-- Lightpanda browser (macOS/Linux, downloads automatically) OR Chrome/Chromium (Windows, or as fallback)
+- Lightpanda browser (macOS/Linux, downloads automatically) or Chrome/Chromium (fallback)
 
 ## License
 
