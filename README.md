@@ -1,10 +1,20 @@
-![SlimAtlas AI Logo](img/slim-atlas-logo.png)
+<div align="center">
+  <img src="img/slim-atlas-logo.svg" alt="SlimAtlas AI Logo" width="180">
+</div>
 
-# SlimAtlas AI
+<h1 align="center">SlimAtlas AI</h1>
 
-A Model Context Protocol (MCP) server that provides extremely lightweight browser automation capabilities using Lightpanda browser. This server enables LLMs to interact with web pages through browser automation. Works with **macOS**, **Linux**, and **Windows**.
+<p align="center">
+  A Model Context Protocol (MCP) server for extremely lightweight browser automation.
+</p>
 
-Built on top of [Puppeteer](https://pptr.dev/) and [Lightpanda](https://github.com/lightpanda-io/browser).
+<p align="center">
+  Works with <strong>macOS</strong>, <strong>Linux</strong>, and <strong>Windows</strong>.
+</p>
+
+<p align="center">
+  Built on top of <a href="https://pptr.dev/">Puppeteer</a> and <a href="https://github.com/lightpanda-io/browser">Lightpanda</a>.
+</p>
 
 ## Features
 
