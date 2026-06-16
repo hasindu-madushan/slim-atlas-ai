@@ -92,20 +92,27 @@ export class LightpandaPool {
     });
   }
 
-  release(sessionId: string): void {
+  async release(sessionId: string): Promise<void> {
     const instance = this.inUse.get(sessionId);
     if (!instance) return;
     this.inUse.delete(sessionId);
 
-    if (this.waitQueue.length > 0) {
-      const next = this.waitQueue.shift()!;
-      next(instance);
-    } else {
-      this.recycleInstance(instance);
+    try {
+      const newInstance = await this.recycleInstance(instance);
+      if (!newInstance) return;
+
+      if (this.waitQueue.length > 0) {
+        const next = this.waitQueue.shift()!;
+        next(newInstance);
+      } else {
+        this.available.push(newInstance);
+      }
+    } catch (e) {
+      console.error(`[pool] Failed to recycle ${instance.id}:`, (e as Error).message);
     }
   }
 
-  private async recycleInstance(instance: LightpandaInstance): Promise<void> {
+  private async recycleInstance(instance: LightpandaInstance): Promise<LightpandaInstance | null> {
     try { await instance.page?.close(); } catch (e) {}
     try { await instance.context?.close(); } catch (e) {}
     try { instance.browser?.disconnect(); } catch (e) {}
@@ -116,11 +123,12 @@ export class LightpandaPool {
       const newInstance = await this.spawnInstanceOnPort(instance.port);
       const idx = this.instances.findIndex(i => i.id === instance.id);
       if (idx >= 0) this.instances[idx] = newInstance;
-      this.available.push(newInstance);
+      return newInstance;
     } catch (e) {
       console.error(`[pool] Failed to recycle ${instance.id}:`, (e as Error).message);
       const idx = this.instances.findIndex(i => i.id === instance.id);
       if (idx >= 0) this.instances.splice(idx, 1);
+      return null;
     }
   }
 

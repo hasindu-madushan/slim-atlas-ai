@@ -68,7 +68,7 @@ export class SessionManager {
           state.preferChrome = true;
           state.browserType = 'chrome';
           if (state.lpInstanceId) {
-            this.lpPool.release(sessionId);
+            await this.lpPool.release(sessionId);
             state.lpInstanceId = undefined;
           }
           await this.attachChrome(sessionId, state);
@@ -117,7 +117,7 @@ export class SessionManager {
       state.manager = null;
     }
     if (state.lpInstanceId) {
-      this.lpPool.release(sessionId);
+      await this.lpPool.release(sessionId);
       state.lpInstanceId = undefined;
     }
   }
@@ -128,14 +128,13 @@ export class SessionManager {
 
     log.info(sessionId, `Releasing session`);
 
-    if (state.manager) {
-      try { await state.manager.close(); } catch (e) {}
-    }
-
     if (state.browserType === 'lightpanda' && state.lpInstanceId) {
-      this.lpPool.release(sessionId);
+      await this.lpPool.release(sessionId);
     } else if (state.browserType === 'chrome' && state.chromeSlotId) {
-      this.chromePool.release(sessionId);
+      await this.chromePool.release(sessionId);
+    } else if (state.manager) {
+      // Fallback for any session not backed by a pool slot
+      try { await state.manager.close(); } catch (e) {}
     }
 
     this.sessions.delete(sessionId);

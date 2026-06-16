@@ -90,7 +90,7 @@ export class ChromePool {
     });
   }
 
-  release(sessionId: string): void {
+  async release(sessionId: string): Promise<void> {
     const slot = this.inUse.get(sessionId);
     if (!slot) return;
     this.inUse.delete(sessionId);
@@ -101,25 +101,32 @@ export class ChromePool {
       return;
     }
 
-    if (this.waitQueue.length > 0) {
-      const next = this.waitQueue.shift()!;
-      next(slot);
-    } else {
-      this.recycleSlot(slot);
+    try {
+      const newSlot = await this.recycleSlot(slot);
+      if (!newSlot) return;
+
+      if (this.waitQueue.length > 0) {
+        const next = this.waitQueue.shift()!;
+        next(newSlot);
+      } else {
+        this.available.push(newSlot);
+      }
+    } catch (e) {
+      console.error('[chrome-pool] Failed to recycle slot:', (e as Error).message);
     }
   }
 
-  private async recycleSlot(slot: ChromeSlot): Promise<void> {
+  private async recycleSlot(slot: ChromeSlot): Promise<ChromeSlot | null> {
     try { await slot.page.close(); } catch (e) {}
     try { await slot.context.close(); } catch (e) {}
 
-    if (!this.browser || !this.browser.connected) return;
+    if (!this.browser || !this.browser.connected) return null;
 
     try {
-      const newSlot = await this.createSlot();
-      this.available.push(newSlot);
+      return await this.createSlot();
     } catch (e) {
       console.error('[chrome-pool] Failed to recycle slot:', (e as Error).message);
+      return null;
     }
   }
 
