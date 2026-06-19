@@ -27,6 +27,10 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 ## Environment variables
 
 - Copy `.env.example` to `.env` for local tuning; the server reads vars at startup.
+- Every env var can also be set as a lower-case CLI flag in `--flag=value` form. CLI flags override env vars. Example:
+  ```bash
+  npx tsx src/index.ts --chrome-enabled=false --lightpanda-pool-size=3 --navigate-timeout=60000
+  ```
 - Notable defaults:
   - `CHROME_ENABLED=true`
   - `STEALTH_ENABLED=true`, `HUMAN_DELAYS_ENABLED=true`

@@ -81,7 +81,7 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_snapshot',
-            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id@url` where #N is the node id and @URL is the link\'s absolute href. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. Use ids with browser_click, browser_type, browser_view_node.',
+            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id@url` where #N is the node id and @URL is the link\'s absolute href. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. To interact with a node, use the numeric ID (the number after #) with the nodeId parameter of browser_click, browser_type, or browser_view_node. Do not pass #N as a selector string.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -104,30 +104,30 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_click',
-            description: 'Click on an element. Use nodeId (recommended) from snapshot, or CSS selector as fallback.',
+            description: 'Click on an element. Recommended: pass nodeId with the numeric ID from the snapshot (the number after #). Fallback: pass a valid CSS selector in selector.',
             inputSchema: {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
-                selector: { type: 'string', description: 'Node ID (from snapshot) or CSS selector' },
-                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended, overrides selector if both provided)' },
+                nodeId: { type: 'number', description: 'Numeric node ID from the snapshot (the number shown after #)' },
+                selector: { type: 'string', description: 'CSS selector fallback when nodeId is not provided' },
               },
-              required: ['session_id', 'selector'],
+              required: ['session_id'],
             },
           },
           {
             name: 'browser_type',
-            description: 'Type text into an element. Use nodeId (recommended) from snapshot, or CSS selector as fallback.',
+            description: 'Type text into an element. Recommended: pass nodeId with the numeric ID from the snapshot (the number after #). Fallback: pass a valid CSS selector in selector.',
             inputSchema: {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
-                selector: { type: 'string', description: 'Node ID (from snapshot) or CSS selector' },
-                nodeId: { type: 'number', description: 'Unique node ID from snapshot (recommended, overrides selector if both provided)' },
+                nodeId: { type: 'number', description: 'Numeric node ID from the snapshot (the number shown after #)' },
+                selector: { type: 'string', description: 'CSS selector fallback when nodeId is not provided' },
                 text: { type: 'string', description: 'Text to type' },
                 delay: { type: 'number', description: 'Delay between keystrokes in ms', default: 0 },
               },
-              required: ['session_id', 'selector', 'text'],
+              required: ['session_id', 'text'],
             },
           },
           {
@@ -381,7 +381,7 @@ export class PuppeteerMCPServer {
         } else {
           sel = args.selector ?? null;
         }
-        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${clickNodeId !== undefined ? `Node ID ${clickNodeId} not found` : 'Selector is required'}` }] };
+        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${clickNodeId !== undefined ? `Node ID ${clickNodeId} not found` : 'Provide nodeId or selector'}` }] };
         await manager.click(sel);
         this.sessionManager.getHistory(sessionId)?.record({ type: 'click', selector: sel });
         return { content: [{ type: 'text', text: `${prefix}\nresult: Clicked: ${sel}` }] };
@@ -397,7 +397,7 @@ export class PuppeteerMCPServer {
         } else {
           typeSel = args.selector ?? null;
         }
-        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeNodeId !== undefined ? `Node ID ${typeNodeId} not found` : 'Selector is required'}` }] };
+        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeNodeId !== undefined ? `Node ID ${typeNodeId} not found` : 'Provide nodeId or selector'}` }] };
         await manager.type(typeSel, args.text, { delay: args.delay });
         this.sessionManager.getHistory(sessionId)?.record({ type: 'type', selector: typeSel, text: args.text, delay: args.delay });
         return { content: [{ type: 'text', text: `${prefix}\nresult: Typed into: ${typeSel}` }] };

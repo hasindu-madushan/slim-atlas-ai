@@ -76,6 +76,32 @@ Add to your MCP client configuration:
 
 **Tip**: Set `CHROME_ENABLED=false` to disable Chrome fallback and use Lightpanda only.
 
+### CLI Flags
+
+Every environment variable in `.env.example` can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables.
+
+```bash
+npx tsx src/index.ts --chrome-enabled=false --lightpanda-pool-size=3 --navigate-timeout=60000
+```
+
+To use flags from an MCP client, append them to the `args` array:
+
+```json
+{
+  "mcpServers": {
+    "slimatlas": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "path/to/mcp/src/index.ts",
+        "--chrome-enabled=false",
+        "--lightpanda-pool-size=3"
+      ]
+    }
+  }
+}
+```
+
 ### Usage Workflow
 
 ```python

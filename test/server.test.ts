@@ -48,6 +48,12 @@ describe('ChromeManager', () => {
       expect(snapshot).toHaveProperty('url');
       expect(snapshot).toHaveProperty('title');
     });
+
+    it('should flatten a single text child inside headings', async () => {
+      await chromeManager.navigate({ url: 'data:text/html,<h3><span>2. DoorDash</span></h3>' });
+      const snapshot = await chromeManager.getSnapshot();
+      expect(snapshot.accessibilityTree).toContain('- heading_3 "2. DoorDash"');
+    });
   });
 
   describe('getHtml', () => {

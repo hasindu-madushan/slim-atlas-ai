@@ -306,6 +306,25 @@ export class BrowserTools {
 
           node.children = mergeConsecutiveTexts(children, el);
 
+          if (node.type && node.type.startsWith('heading_') && node.children && node.children.length > 0 && !node.text) {
+            var allTextChildren = true;
+            var headingTextParts = [];
+            var headingInheritedId = undefined;
+            for (var hi = 0; hi < node.children.length; hi++) {
+              var hc = node.children[hi];
+              if (hc.type !== 'text' || hc.children) { allTextChildren = false; break; }
+              if (hc.text) headingTextParts.push(hc.text);
+              if (hc.id !== undefined && headingInheritedId === undefined) headingInheritedId = hc.id;
+            }
+            if (allTextChildren && headingTextParts.length > 0) {
+              var headingMerged = headingTextParts.join(' ');
+              var headingMergedTrimmed = trimText(headingMerged, trimLength);
+              node.text = headingMergedTrimmed || headingMerged;
+              if (headingMergedTrimmed && headingInheritedId !== undefined) node.id = headingInheritedId;
+              node.children = undefined;
+            }
+          }
+
           if (node.type === 'text' && node.children && node.children.length > 0) {
             var allTextChildren = true;
             for (var ti = 0; ti < node.children.length; ti++) {

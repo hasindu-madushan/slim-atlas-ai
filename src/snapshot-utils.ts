@@ -192,4 +192,4 @@ export function generateSelector(element: Element): string {
   return path;
 }
 
-export const SNAPSHOT_FORMAT_EXPLANATION = `## Format: heading_1-6 | text "x" | link "x" | button "x" | textbox/combobox/checkbox/radio/spinbutton/slider/option | image | list/listitem/row/cell/columnheader/table | contentinfo/banner/navigation/form/group/dialog/label; attrs use #N for id, @URL for url; long values end "... (trimmed)"; use browser_view_node for full content.`;
+export const SNAPSHOT_FORMAT_EXPLANATION = `## Format: heading_1-6 | text "x" | link "x" | button "x" | textbox/combobox/checkbox/radio/spinbutton/slider/option | image | list/listitem/row/cell/columnheader/table | contentinfo/banner/navigation/form/group/dialog/label; attrs use #N for id, @URL for url; long values end "... (trimmed)"; use browser_view_node for full content. To click/type/view a node, pass its numeric ID (the number after #) to the nodeId parameter — do not pass #N or selector "#N".`;
