@@ -117,8 +117,8 @@ export class ChromeManager {
     return this.getTools().getPageInfo();
   }
 
-  async getSnapshot(): Promise<SnapshotResult> {
-    return this.getTools().getSnapshot();
+  async getSnapshot(showUrls?: boolean): Promise<SnapshotResult> {
+    return this.getTools().getSnapshot(showUrls);
   }
 
   async viewNode(nodeId: number): Promise<ViewNodeResult> {

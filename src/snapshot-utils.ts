@@ -116,7 +116,7 @@ function shouldSkipStructural(node: SnapshotNode): boolean {
  * Converts a snapshot node tree to indented text format.
  * Runs in Node.js context.
  */
-export function treeToString(nodes: SnapshotNode[], indent: number = 0): string {
+export function treeToString(nodes: SnapshotNode[], indent: number = 0, showUrls: boolean = false): string {
   const prefix = '  '.repeat(indent);
   const lines: string[] = [];
 
@@ -134,7 +134,7 @@ export function treeToString(nodes: SnapshotNode[], indent: number = 0): string 
     if (node.id !== undefined) {
       line += ` #${node.id}`;
     }
-    if (node.url) {
+    if (showUrls && node.url) {
       line += `@${node.url}`;
     }
 

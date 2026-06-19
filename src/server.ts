@@ -62,7 +62,7 @@ export class PuppeteerMCPServer {
         tools: [
           {
             name: 'browser_navigate',
-            description: 'Navigate to a URL. Provide session_id to reuse an existing session, or omit to create a new one. Set use_chrome=true to force Chrome (better for bot detection evasion).',
+            description: 'Navigate to a URL. Provide session_id to reuse an existing session, or omit to create a new one.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -74,18 +74,18 @@ export class PuppeteerMCPServer {
                   description: 'When to consider navigation finished',
                   default: 'domcontentloaded',
                 },
-                use_chrome: { type: 'boolean', description: 'Force Chrome instead of Lightpanda. Recommended for sites with bot detection (Cloudflare, CAPTCHA).', default: false },
               },
               required: ['url'],
             },
           },
           {
             name: 'browser_snapshot',
-            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id@url` where #N is the node id and @URL is the link\'s absolute href. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. To interact with a node, use the numeric ID (the number after #) with the nodeId parameter of browser_click, browser_type, or browser_view_node. Do not pass #N as a selector string.',
+            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id` where #N is the node id. Link URLs are omitted by default; set show_urls=true to include absolute URLs as `#id@url`. Only enable show_urls when necessary because URLs consume a lot of tokens. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. To interact with a node, use the numeric ID (the number after #) with the nodeId parameter of browser_click, browser_type, or browser_view_node. Do not pass #N as a selector string.',
             inputSchema: {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
+                show_urls: { type: 'boolean', default: false, description: 'Include absolute URLs for links (e.g. #id@url). Only enable when necessary; URLs increase token usage significantly.' },
               },
               required: ['session_id'],
             },
@@ -256,20 +256,17 @@ export class PuppeteerMCPServer {
   }
 
   private async executeTool(sessionId: string, toolName: string, args: Record<string, any>): Promise<any> {
-    const useChrome = args.use_chrome === true;
     log.info(sessionId, `Executing ${toolName}`);
 
     if (!this.sessionManager.has(sessionId)) {
-      log.info(sessionId, `New session, acquiring browser (chrome=${useChrome})`);
-      await this.sessionManager.acquire(sessionId, useChrome || this.sessionManager.shouldPreferChrome(sessionId));
-    } else if (useChrome && CHROME_ENABLED && this.sessionManager.getBrowserType(sessionId) !== 'chrome') {
-      log.info(sessionId, `Switching to Chrome`);
-      await this.sessionManager.acquire(sessionId, true);
+      const preferChrome = this.sessionManager.shouldPreferChrome(sessionId);
+      log.info(sessionId, `New session, acquiring browser (chrome=${preferChrome})`);
+      await this.sessionManager.acquire(sessionId, preferChrome);
     }
 
     let manager = this.sessionManager.getManager(sessionId);
     if (!manager) {
-      manager = await this.sessionManager.acquire(sessionId, useChrome);
+      manager = await this.sessionManager.acquire(sessionId, this.sessionManager.shouldPreferChrome(sessionId));
     }
 
     try {
@@ -316,7 +313,7 @@ export class PuppeteerMCPServer {
           }
         }
 
-        if (browserType === 'lightpanda' && CHROME_ENABLED && !args.use_chrome) {
+        if (browserType === 'lightpanda' && CHROME_ENABLED) {
           try {
             const isBlocked = await this.checkBotDetection(manager);
 
@@ -360,7 +357,7 @@ export class PuppeteerMCPServer {
       }
 
       case 'browser_snapshot': {
-        const snapshot = await manager.getSnapshot();
+        const snapshot = await manager.getSnapshot(args.show_urls === true);
         return { content: [{ type: 'text', text: `${prefix}\nresult: ${snapshot.accessibilityTree}` }] };
       }
 

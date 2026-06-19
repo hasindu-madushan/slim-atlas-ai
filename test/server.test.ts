@@ -54,6 +54,19 @@ describe('ChromeManager', () => {
       const snapshot = await chromeManager.getSnapshot();
       expect(snapshot.accessibilityTree).toContain('- heading_3 "2. DoorDash"');
     });
+
+    it('should omit link URLs by default', async () => {
+      await chromeManager.navigate({ url: 'data:text/html,<a href="https://example.org">Example</a>' });
+      const snapshot = await chromeManager.getSnapshot();
+      expect(snapshot.accessibilityTree).toContain('- link "Example" #');
+      expect(snapshot.accessibilityTree).not.toContain('@https://example.org');
+    });
+
+    it('should include link URLs when show_urls is true', async () => {
+      await chromeManager.navigate({ url: 'data:text/html,<a href="https://example.org">Example</a>' });
+      const snapshot = await chromeManager.getSnapshot(true);
+      expect(snapshot.accessibilityTree).toContain('@https://example.org');
+    });
   });
 
   describe('getHtml', () => {

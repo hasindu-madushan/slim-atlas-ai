@@ -21,7 +21,7 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 - Default browser on macOS/Linux is **Lightpanda**; the binary lives at repo root as `lightpanda` and is auto-downloaded on first run if missing. It is gitignored.
 - **Chrome fallback is enabled by default** (`CHROME_ENABLED=true`). The server switches to Chrome when Lightpanda crashes, times out, or hits bot detection.
 - Only macOS and Linux are supported; there is no Windows build.
-- `use_chrome=true` on `browser_navigate` forces Chrome for a session.
+
 - Sessions are serialised per `session_id` via an internal queue; concurrent calls to the same session are processed sequentially.
 
 ## Environment variables
@@ -61,7 +61,7 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 
 Live source of truth: the `tools/list` MCP response. Currently exposed:
 
-- `browser_navigate` — Navigate to a URL; creates a new session if `session_id` is omitted. Supports `use_chrome=true` to force Chrome.
+- `browser_navigate` — Navigate to a URL; creates a new session if `session_id` is omitted.
 - `browser_snapshot` — YAML-like accessibility tree with node IDs for targeting.
 - `browser_view_node` — Inspect a node from the snapshot (text, URL, or image).
 - `browser_click` — Click by node ID (preferred) or CSS selector.

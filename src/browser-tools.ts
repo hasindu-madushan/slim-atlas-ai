@@ -46,7 +46,7 @@ export class BrowserTools {
     };
   }
 
-  async getSnapshot(): Promise<SnapshotResult> {
+  async getSnapshot(showUrls?: boolean): Promise<SnapshotResult> {
     this.idToSelector.clear();
     this.idToUrl.clear();
 
@@ -362,7 +362,7 @@ export class BrowserTools {
       })()
     `) as { tree: any[]; selectorMap: Record<number, string>; urlMap: Record<number, string> };
 
-    const yamlOutput = treeToString(result.tree);
+    const yamlOutput = treeToString(result.tree, 0, !!showUrls);
 
     this.idToSelector.clear();
     this.idToUrl.clear();
