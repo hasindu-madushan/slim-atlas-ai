@@ -337,7 +337,9 @@ export class PuppeteerMCPServer {
       }
 
       case 'browser_snapshot': {
-        const check = await this.checkBotDetection(manager);
+        const check = browserType === 'lightpanda'
+          ? await this.checkBotDetectionLightpanda(manager)
+          : await this.checkBotDetectionChrome(manager);
         if (check.blocked && check.certain) {
           let title = '';
           let url = '';
@@ -472,7 +474,13 @@ export class PuppeteerMCPServer {
     }
   }
 
-  private async checkBotDetection(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
+  private analyzeBotSignals(
+    html: string,
+    bodyText: string,
+    elCount: number,
+    title: string,
+    hostname: string,
+  ): { blocked: boolean; certain: boolean; reason: string } {
     const STRONG_MARKERS = [
       'cf-chl-bypass', 'cdn-cgi/challenge-platform', 'px-captcha',
       'bm-challenge', '/_bm/', 'datadome',
@@ -485,6 +493,68 @@ export class PuppeteerMCPServer {
     const CHALLENGE_TITLE_PREFIX = /^(just a moment|checking your browser|access denied|ddos protection|human verification|verify you are human|attention required)\b/i;
     const CHALLENGE_TITLE_FRAGMENT = /access denied|verify|checking|challenge|blocked|attention required/i;
 
+    const t = (title || '').trim();
+
+    for (const m of STRONG_MARKERS) {
+      if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
+    }
+
+    if (CHALLENGE_TITLE_PREFIX.test(t)) {
+      return { blocked: true, certain: true, reason: `challenge title: "${t}"` };
+    }
+
+    const isNearEmpty = bodyText.length < 50 && elCount < 20;
+    if (isNearEmpty) {
+      const isBareTitle = t === '' || t === hostname || t.length < 4;
+      const isChallengeTitle = CHALLENGE_TITLE_FRAGMENT.test(t);
+      const hasWeakMarker = WEAK_MARKERS.some((m) => html.includes(m));
+      if (isBareTitle || isChallengeTitle || hasWeakMarker) {
+        return {
+          blocked: true,
+          certain: true,
+          reason: `near-empty body (${bodyText.length} chars, ${elCount} elements; title="${t}")`,
+        };
+      }
+    }
+
+    return { blocked: false, certain: true, reason: '' };
+  }
+
+  private async checkBotDetectionLightpanda(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
+    try {
+      const page = manager.getPage();
+      const info = await page.evaluate(`
+        (function() {
+          var body = document.body;
+          function visibleText(el) {
+            var s = '', c = el.childNodes;
+            for (var i = 0; i < c.length; i++) {
+              var n = c[i];
+              if (n.nodeType === 3) s += n.textContent;
+              else if (n.nodeType === 1) {
+                var tag = n.tagName.toLowerCase();
+                if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') continue;
+                s += visibleText(n);
+              }
+            }
+            return s;
+          }
+          return {
+            html: document.documentElement.outerHTML.toLowerCase(),
+            bodyText: (body ? visibleText(body) : '').trim(),
+            elCount: body ? body.querySelectorAll('*').length : 0,
+            title: document.title,
+            hostname: location.hostname.replace(/^www\\./, ''),
+          };
+        })()
+      `) as { html: string; bodyText: string; elCount: number; title: string; hostname: string };
+      return this.analyzeBotSignals(info.html, info.bodyText, info.elCount, info.title, info.hostname);
+    } catch (e: any) {
+      return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
+    }
+  }
+
+  private async checkBotDetectionChrome(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
     try {
       const page = manager.getPage();
       const client = await page.createCDPSession();
@@ -507,31 +577,7 @@ export class PuppeteerMCPServer {
         })()
       `) as { bodyText: string; elCount: number; title: string; hostname: string };
 
-      const title = (info.title || '').trim();
-
-      for (const m of STRONG_MARKERS) {
-        if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
-      }
-
-      if (CHALLENGE_TITLE_PREFIX.test(title)) {
-        return { blocked: true, certain: true, reason: `challenge title: "${title}"` };
-      }
-
-      const isNearEmpty = info.bodyText.length < 50 && info.elCount < 20;
-      if (isNearEmpty) {
-        const isBareTitle = title === '' || title === info.hostname || title.length < 4;
-        const isChallengeTitle = CHALLENGE_TITLE_FRAGMENT.test(title);
-        const hasWeakMarker = WEAK_MARKERS.some((m) => html.includes(m));
-        if (isBareTitle || isChallengeTitle || hasWeakMarker) {
-          return {
-            blocked: true,
-            certain: true,
-            reason: `near-empty body (${info.bodyText.length} chars, ${info.elCount} elements; title="${title}")`,
-          };
-        }
-      }
-
-      return { blocked: false, certain: true, reason: '' };
+      return this.analyzeBotSignals(html, info.bodyText, info.elCount, info.title, info.hostname);
     } catch (e: any) {
       return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
     }
@@ -560,7 +606,9 @@ export class PuppeteerMCPServer {
       }
     }
 
-    let check = await this.checkBotDetection(currentManager);
+    let check = this.sessionManager.getBrowserType(sessionId) === 'lightpanda'
+      ? await this.checkBotDetectionLightpanda(currentManager)
+      : await this.checkBotDetectionChrome(currentManager);
 
     if (check.blocked) {
       const currentType = this.sessionManager.getBrowserType(sessionId);
@@ -573,7 +621,7 @@ export class PuppeteerMCPServer {
         } catch (e) {
           throw e;
         }
-        check = await this.checkBotDetection(currentManager);
+        check = await this.checkBotDetectionChrome(currentManager);
       }
     }
 
@@ -585,7 +633,7 @@ export class PuppeteerMCPServer {
           this.sessionManager.markPreferHeadfulChrome(sessionId);
           currentManager = await this.sessionManager.acquire(sessionId, false, true);
           await currentManager.navigate({ url, waitUntil });
-          check = await this.checkBotDetection(currentManager);
+          check = await this.checkBotDetectionChrome(currentManager);
         } catch (e: any) {
           const errMsg = e?.message || String(e);
           log.error(sessionId, `Headful Chrome escalation failed: ${errMsg}`);
