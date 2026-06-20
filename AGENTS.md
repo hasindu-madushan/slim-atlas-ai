@@ -27,10 +27,11 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 
 ## Bot detection (`src/server.ts:checkBotDetection`)
 
-Returns `{ blocked, certain, reason }`. Triggers on:
+Returns `{ blocked, certain, reason }`. Three tiers, evaluated in order:
 
-- **Marker scan** (Cloudflare, Akamai, PerimeterX, DataDome, generic): `cf-ray`, `cf-chl-bypass`, `challenge-platform`, `cdn-cgi/challenge-platform`, `checking your browser`, `ddos protection`, `access denied`, `captcha`, `akamai`, `/_bm/`, `bm-challenge`, `px-captcha`, `perimeterx`, `datadome`, `human verification`, `verify you are human`, `bot detection`, `attention required`.
-- **Content-presence heuristic** (catches Akamai-style interstitials that don't match markers, e.g. G2's `Title: g2.com`): `bodyText.length < 50 && elCount < 20 && (title === hostname || title.length < 4 || /access denied|verify|checking|challenge|blocked|attention required/i.test(title))`.
+- **Tier 1 — Strong structural markers** (block regardless of body content): `cf-chl-bypass`, `cdn-cgi/challenge-platform`, `px-captcha`, `bm-challenge`, `/_bm/`, `datadome`. These only appear on actual challenge pages.
+- **Tier 2 — Title prefix match** (block regardless of body content): `document.title` matches `/^(just a moment|checking your browser|access denied|ddos protection|human verification|verify you are human|attention required)\b/i`. Whole-title match, not substring.
+- **Tier 3 — Near-empty body + suspicious signal** (block): `bodyText.length < 50 && elCount < 20` AND one of: bare title (empty, `=== hostname`, or `< 4` chars), title matches the challenge fragment regex, or HTML contains a weak marker. Weak markers (`cf-ray`, `challenge-platform`, `checking your browser`, `ddos protection`, `captcha`, `akamai`, `perimeterx`, `human verification`, `verify you are human`, `bot detection`, `attention required`) only count when combined with the near-empty-body condition — this prevents false positives on full pages that merely mention reCAPTCHA, Akamai CDN, etc.
 - **Internal CDP error** → `{ blocked: true, certain: false }`. Preserves the legacy "Lightpanda CDP failure → switch to Chrome" behaviour without false-positiving Chrome (only `certain: true` triggers escalation on Chrome).
 
 Escalation chain on `browser_navigate`:

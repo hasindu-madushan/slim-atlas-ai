@@ -80,12 +80,12 @@ export class PuppeteerMCPServer {
           },
           {
             name: 'browser_snapshot',
-            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id` where #N is the node id. Link URLs are omitted by default; set show_urls=true to include absolute URLs as `#id@url`. Only enable show_urls when necessary because URLs consume a lot of tokens. Long values end "... (trimmed)" — use browser_view_node to get the full content. Empty structural wrappers are omitted. To interact with a node, use the numeric ID (the number after #) with the nodeId parameter of browser_click, browser_type, or browser_view_node. Do not pass #N as a selector string.',
+            description: 'Get a semantic snapshot of the current page. Each line: `- type "text" #id` where #N is the node id. **Link URLs are omitted by default to save tokens.** To get a link\'s URL, prefer `browser_view_node` with the link\'s numeric ID — it returns the absolute URL for a single link. Only set `show_urls=true` when you need URLs for many links at once and have already decided the extra tokens are worth it. Long values end "... (trimmed)" — use `browser_view_node` to get the full text. Empty structural wrappers are omitted. To interact with a node, use the numeric ID (the number after #) with the `nodeId` parameter of `browser_click`, `browser_type`, or `browser_view_node`. Do not pass #N or selector "#N".',
             inputSchema: {
               type: 'object',
               properties: {
                 session_id: { type: 'string', description: 'Session ID from a previous browser_navigate call' },
-                show_urls: { type: 'boolean', default: false, description: 'Include absolute URLs for links (e.g. #id@url). Only enable when necessary; URLs increase token usage significantly.' },
+                show_urls: { type: 'boolean', default: false, description: 'When true, include absolute URLs inline as `#id@url` for every link in the snapshot. Default false (URLs omitted to save tokens). Prefer `browser_view_node` for one-off URL lookups; only enable this when you need URLs for many links in the same snapshot.' },
               },
               required: ['session_id'],
             },
@@ -473,6 +473,18 @@ export class PuppeteerMCPServer {
   }
 
   private async checkBotDetection(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
+    const STRONG_MARKERS = [
+      'cf-chl-bypass', 'cdn-cgi/challenge-platform', 'px-captcha',
+      'bm-challenge', '/_bm/', 'datadome',
+    ];
+    const WEAK_MARKERS = [
+      'cf-ray', 'challenge-platform', 'checking your browser',
+      'ddos protection', 'captcha', 'akamai', 'perimeterx',
+      'human verification', 'verify you are human', 'bot detection', 'attention required',
+    ];
+    const CHALLENGE_TITLE_PREFIX = /^(just a moment|checking your browser|access denied|ddos protection|human verification|verify you are human|attention required)\b/i;
+    const CHALLENGE_TITLE_FRAGMENT = /access denied|verify|checking|challenge|blocked|attention required/i;
+
     try {
       const page = manager.getPage();
       const client = await page.createCDPSession();
@@ -480,16 +492,6 @@ export class PuppeteerMCPServer {
       const { outerHTML } = await client.send('DOM.getOuterHTML' as any, { nodeId: root.nodeId }) as { outerHTML: string };
       await client.detach();
       const html = outerHTML.toLowerCase();
-
-      const markers = [
-        'cf-ray', 'cf-chl-bypass', 'challenge-platform', 'cdn-cgi/challenge-platform',
-        'checking your browser', 'ddos protection', 'access denied', 'captcha',
-        'akamai', '/_bm/', 'bm-challenge', 'px-captcha', 'perimeterx', 'datadome',
-        'human verification', 'verify you are human', 'bot detection', 'attention required',
-      ];
-      for (const m of markers) {
-        if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
-      }
 
       const info = await page.evaluate(`
         (function() {
@@ -506,15 +508,27 @@ export class PuppeteerMCPServer {
       `) as { bodyText: string; elCount: number; title: string; hostname: string };
 
       const title = (info.title || '').trim();
-      const isBareTitle = title === '' || title === info.hostname || title.length < 4;
-      const isChallengeTitle = /access denied|verify|checking|challenge|blocked|attention required/i.test(title);
+
+      for (const m of STRONG_MARKERS) {
+        if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
+      }
+
+      if (CHALLENGE_TITLE_PREFIX.test(title)) {
+        return { blocked: true, certain: true, reason: `challenge title: "${title}"` };
+      }
+
       const isNearEmpty = info.bodyText.length < 50 && info.elCount < 20;
-      if (isNearEmpty && (isBareTitle || isChallengeTitle)) {
-        return {
-          blocked: true,
-          certain: true,
-          reason: `near-empty body (${info.bodyText.length} chars, ${info.elCount} elements; title="${title}")`,
-        };
+      if (isNearEmpty) {
+        const isBareTitle = title === '' || title === info.hostname || title.length < 4;
+        const isChallengeTitle = CHALLENGE_TITLE_FRAGMENT.test(title);
+        const hasWeakMarker = WEAK_MARKERS.some((m) => html.includes(m));
+        if (isBareTitle || isChallengeTitle || hasWeakMarker) {
+          return {
+            blocked: true,
+            certain: true,
+            reason: `near-empty body (${info.bodyText.length} chars, ${info.elCount} elements; title="${title}")`,
+          };
+        }
       }
 
       return { blocked: false, certain: true, reason: '' };
