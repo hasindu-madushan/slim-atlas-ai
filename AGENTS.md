@@ -20,9 +20,23 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 
 - Default browser on macOS/Linux is **Lightpanda**; the binary lives at repo root as `lightpanda` and is auto-downloaded on first run if missing. It is gitignored.
 - **Chrome fallback is enabled by default** (`CHROME_ENABLED=true`). The server switches to Chrome when Lightpanda crashes, times out, or hits bot detection.
+- **Headful Chrome auto-escalation.** If headless Chrome is also bot-detected (after escalation from Lightpanda), a single per-session switch to headful Chrome (`headless: false`) is triggered automatically. Headful Chrome is **sticky per session** — once escalated, subsequent calls on that session stay headful. The headful pool is lazy: it does not launch or claim resources until a session actually needs it. On macOS the headful browser opens a real visible window (dev-only). On Linux servers without `DISPLAY`, the headful pool lazily spawns `Xvfb` on a free display (`:99`, scanning up to `:103` if taken) and tears it down at shutdown. If `Xvfb` is not installed (`apt-get install xvfb`), escalation fails and the navigate returns an honest `isError` result.
 - Only macOS and Linux are supported; there is no Windows build.
 
 - Sessions are serialised per `session_id` via an internal queue; concurrent calls to the same session are processed sequentially.
+
+## Bot detection (`src/server.ts:checkBotDetection`)
+
+Returns `{ blocked, certain, reason }`. Triggers on:
+
+- **Marker scan** (Cloudflare, Akamai, PerimeterX, DataDome, generic): `cf-ray`, `cf-chl-bypass`, `challenge-platform`, `cdn-cgi/challenge-platform`, `checking your browser`, `ddos protection`, `access denied`, `captcha`, `akamai`, `/_bm/`, `bm-challenge`, `px-captcha`, `perimeterx`, `datadome`, `human verification`, `verify you are human`, `bot detection`, `attention required`.
+- **Content-presence heuristic** (catches Akamai-style interstitials that don't match markers, e.g. G2's `Title: g2.com`): `bodyText.length < 50 && elCount < 20 && (title === hostname || title.length < 4 || /access denied|verify|checking|challenge|blocked|attention required/i.test(title))`.
+- **Internal CDP error** → `{ blocked: true, certain: false }`. Preserves the legacy "Lightpanda CDP failure → switch to Chrome" behaviour without false-positiving Chrome (only `certain: true` triggers escalation on Chrome).
+
+Escalation chain on `browser_navigate`:
+```
+Lightpanda  ── (bot/timeout) ──▶  headless Chrome  ── (bot, certain) ──▶  headful Chrome  ── (bot, certain) ──▶  isError
+```
 
 ## Environment variables
 
@@ -35,7 +49,7 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
   - `CHROME_ENABLED=true`
   - `STEALTH_ENABLED=true`, `HUMAN_DELAYS_ENABLED=true`
   - `NAVIGATE_WAIT_UNTIL=domcontentloaded`, `NAVIGATE_TIMEOUT=30000`
-  - `LIGHTPANDA_POOL_SIZE=5`, `CHROME_POOL_SIZE=1`
+  - `LIGHTPANDA_POOL_SIZE=5`, `CHROME_POOL_SIZE=1`, `HEADFUL_CHROME_POOL_SIZE` defaults to `CHROME_POOL_SIZE`
   - `CLEANUP_INTERVAL_MS=600000`, `SESSION_IDLE_TIMEOUT_MS=300000`
 
 ## TypeScript / module conventions

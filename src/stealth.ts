@@ -51,12 +51,16 @@ export function getStealthConfig(): StealthConfig {
   };
 }
 
-export function getAntiDetectionArgs(): string[] {
+export function getAntiDetectionArgs(headless: boolean = true): string[] {
   const args = [
     '--disable-blink-features=AutomationControlled',
     '--disable-features=IsolateOrigins,site-per-process',
     '--disable-site-isolation-trials',
   ];
+
+  if (headless) {
+    args.push('--disable-gpu');
+  }
 
   const proxy = process.env.PROXY_SERVER;
   if (proxy) {

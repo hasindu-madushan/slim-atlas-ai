@@ -12,7 +12,6 @@ puppeteer.use(StealthPlugin());
 
 const CHROME_LAUNCH_ARGS = [
   '--no-sandbox',
-  '--disable-gpu',
   '--disable-dev-shm-usage',
   '--no-first-run',
   '--disable-extensions',
@@ -22,7 +21,7 @@ const CHROME_LAUNCH_ARGS = [
   '--disable-translate',
   '--metrics-recording-only',
   '--mute-audio',
-  ...getAntiDetectionArgs(),
+  ...getAntiDetectionArgs(true),
 ];
 
 export class ChromeManager {

@@ -299,40 +299,20 @@ export class PuppeteerMCPServer {
 
     switch (toolName) {
       case 'browser_navigate': {
-        try {
-          await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
-        } catch (navError: any) {
-          const msg = (navError?.message || '').toLowerCase();
-          if ((msg.includes('timeout') || msg.includes('timed out')) && browserType === 'lightpanda' && CHROME_ENABLED) {
-            log.warn(sessionId, `Navigation timeout on Lightpanda, switching to Chrome`);
-            this.sessionManager.markPreferChrome(sessionId);
-            manager = await this.sessionManager.acquire(sessionId, true);
-            await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
-          } else {
-            throw navError;
-          }
+        const navResult = await this.navigateWithBotCheck(
+          sessionId,
+          manager,
+          args.url,
+          args.waitUntil || DEFAULT_WAIT_UNTIL,
+          browserType
+        );
+        if (!navResult.ok) {
+          return {
+            content: [{ type: 'text', text: `${prefix}\nresult: ${navResult.message}` }],
+            isError: true,
+          };
         }
-
-        if (browserType === 'lightpanda' && CHROME_ENABLED) {
-          try {
-            const isBlocked = await this.checkBotDetection(manager);
-
-            if (isBlocked) {
-              log.warn(sessionId, `Bot detection triggered on Lightpanda, switching to Chrome`);
-              this.sessionManager.markPreferChrome(sessionId);
-              manager = await this.sessionManager.acquire(sessionId, true);
-              await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
-            }
-          } catch (detectError: any) {
-            const detectMsg = (detectError?.message || '').toLowerCase();
-            if ((detectMsg.includes('timeout') || detectMsg.includes('timed out')) && CHROME_ENABLED) {
-              log.warn(sessionId, `Bot detection timed out on Lightpanda, switching to Chrome`);
-              this.sessionManager.markPreferChrome(sessionId);
-              manager = await this.sessionManager.acquire(sessionId, true);
-              await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
-            }
-          }
-        }
+        manager = navResult.manager;
 
         this.sessionManager.getHistory(sessionId)?.record({ type: 'navigate', url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
 
@@ -341,7 +321,7 @@ export class PuppeteerMCPServer {
           info = await manager.getPageInfo();
         } catch (infoError: any) {
           const infoMsg = (infoError?.message || '').toLowerCase();
-          if ((infoMsg.includes('timeout') || infoMsg.includes('timed out')) && browserType === 'lightpanda' && CHROME_ENABLED) {
+          if ((infoMsg.includes('timeout') || infoMsg.includes('timed out')) && this.sessionManager.getBrowserType(sessionId) === 'lightpanda' && CHROME_ENABLED) {
             log.warn(sessionId, `getPageInfo timed out on Lightpanda, switching to Chrome`);
             this.sessionManager.markPreferChrome(sessionId);
             manager = await this.sessionManager.acquire(sessionId, true);
@@ -357,6 +337,20 @@ export class PuppeteerMCPServer {
       }
 
       case 'browser_snapshot': {
+        const check = await this.checkBotDetection(manager);
+        if (check.blocked && check.certain) {
+          let title = '';
+          let url = '';
+          try {
+            const info = await manager.getPageInfo();
+            title = info.title;
+            url = info.url;
+          } catch {}
+          return {
+            content: [{ type: 'text', text: `${prefix}\nresult: Bot challenge detected (${check.reason}). Snapshot empty. url=${url} title="${title}"` }],
+            isError: true,
+          };
+        }
         const snapshot = await manager.getSnapshot(args.show_urls === true);
         return { content: [{ type: 'text', text: `${prefix}\nresult: ${snapshot.accessibilityTree}` }] };
       }
@@ -478,7 +472,7 @@ export class PuppeteerMCPServer {
     }
   }
 
-  private async checkBotDetection(manager: ChromeManager): Promise<boolean> {
+  private async checkBotDetection(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
     try {
       const page = manager.getPage();
       const client = await page.createCDPSession();
@@ -486,19 +480,121 @@ export class PuppeteerMCPServer {
       const { outerHTML } = await client.send('DOM.getOuterHTML' as any, { nodeId: root.nodeId }) as { outerHTML: string };
       await client.detach();
       const html = outerHTML.toLowerCase();
-      return (
-        html.includes('cf-ray') ||
-        html.includes('cf-chl-bypass') ||
-        html.includes('challenge-platform') ||
-        html.includes('cdn-cgi/challenge-platform') ||
-        html.includes('checking your browser') ||
-        html.includes('ddos protection') ||
-        html.includes('access denied') ||
-        html.includes('captcha')
-      );
-    } catch {
-      return true;
+
+      const markers = [
+        'cf-ray', 'cf-chl-bypass', 'challenge-platform', 'cdn-cgi/challenge-platform',
+        'checking your browser', 'ddos protection', 'access denied', 'captcha',
+        'akamai', '/_bm/', 'bm-challenge', 'px-captcha', 'perimeterx', 'datadome',
+        'human verification', 'verify you are human', 'bot detection', 'attention required',
+      ];
+      for (const m of markers) {
+        if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
+      }
+
+      const info = await page.evaluate(`
+        (function() {
+          var body = document.body;
+          var text = body ? (body.innerText || '') : '';
+          var elCount = body ? body.querySelectorAll('*').length : 0;
+          return {
+            bodyText: text.trim(),
+            elCount: elCount,
+            title: document.title,
+            hostname: location.hostname.replace(/^www\\./, ''),
+          };
+        })()
+      `) as { bodyText: string; elCount: number; title: string; hostname: string };
+
+      const title = (info.title || '').trim();
+      const isBareTitle = title === '' || title === info.hostname || title.length < 4;
+      const isChallengeTitle = /access denied|verify|checking|challenge|blocked|attention required/i.test(title);
+      const isNearEmpty = info.bodyText.length < 50 && info.elCount < 20;
+      if (isNearEmpty && (isBareTitle || isChallengeTitle)) {
+        return {
+          blocked: true,
+          certain: true,
+          reason: `near-empty body (${info.bodyText.length} chars, ${info.elCount} elements; title="${title}")`,
+        };
+      }
+
+      return { blocked: false, certain: true, reason: '' };
+    } catch (e: any) {
+      return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
     }
+  }
+
+  private async navigateWithBotCheck(
+    sessionId: string,
+    manager: ChromeManager,
+    url: string,
+    waitUntil: 'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2',
+    initialBrowserType: string
+  ): Promise<{ ok: true; manager: ChromeManager } | { ok: false; message: string }> {
+    let currentManager = manager;
+
+    try {
+      await currentManager.navigate({ url, waitUntil });
+    } catch (navError: any) {
+      const msg = (navError?.message || '').toLowerCase();
+      if ((msg.includes('timeout') || msg.includes('timed out')) && initialBrowserType === 'lightpanda' && CHROME_ENABLED) {
+        log.warn(sessionId, `Navigation timeout on Lightpanda, switching to headless Chrome`);
+        this.sessionManager.markPreferChrome(sessionId);
+        currentManager = await this.sessionManager.acquire(sessionId, true);
+        await currentManager.navigate({ url, waitUntil });
+      } else {
+        throw navError;
+      }
+    }
+
+    let check = await this.checkBotDetection(currentManager);
+
+    if (check.blocked) {
+      const currentType = this.sessionManager.getBrowserType(sessionId);
+      if (currentType === 'lightpanda' && CHROME_ENABLED) {
+        log.warn(sessionId, `Bot challenge on Lightpanda (${check.reason}), switching to headless Chrome`);
+        this.sessionManager.markPreferChrome(sessionId);
+        currentManager = await this.sessionManager.acquire(sessionId, true);
+        try {
+          await currentManager.navigate({ url, waitUntil });
+        } catch (e) {
+          throw e;
+        }
+        check = await this.checkBotDetection(currentManager);
+      }
+    }
+
+    if (check.blocked && check.certain && CHROME_ENABLED) {
+      const currentType = this.sessionManager.getBrowserType(sessionId);
+      if (currentType === 'chrome') {
+        try {
+          log.warn(sessionId, `Bot challenge on headless Chrome (${check.reason}), escalating to headful Chrome`);
+          this.sessionManager.markPreferHeadfulChrome(sessionId);
+          currentManager = await this.sessionManager.acquire(sessionId, false, true);
+          await currentManager.navigate({ url, waitUntil });
+          check = await this.checkBotDetection(currentManager);
+        } catch (e: any) {
+          const errMsg = e?.message || String(e);
+          log.error(sessionId, `Headful Chrome escalation failed: ${errMsg}`);
+          return {
+            ok: false,
+            message: `Bot challenge detected (${check.reason}). Fallback failed: ${errMsg}.`,
+          };
+        }
+      }
+    }
+
+    if (check.blocked && check.certain) {
+      return {
+        ok: false,
+        message: `Bot challenge detected (${check.reason}). Cannot render page.`,
+      };
+    }
+
+    if (check.blocked && !check.certain) {
+      log.warn(sessionId, `Bot detection check was uncertain (${check.reason}); proceeding without escalation`);
+    }
+
+    return { ok: true, manager: currentManager };
   }
 
   async run(): Promise<void> {

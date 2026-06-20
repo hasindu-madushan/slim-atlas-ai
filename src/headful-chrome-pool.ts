@@ -5,10 +5,11 @@ import { exec } from 'child_process';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
+import { ensureDisplay, type DisplayHandle } from './xvfb.js';
 
 puppeteer.use(StealthPlugin());
 
-const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
+const MAX_SIZE = parseInt(process.env.HEADFUL_CHROME_POOL_SIZE || process.env.CHROME_POOL_SIZE || '1', 10);
 
 function getProcessMemoryBytes(pid: number): Promise<number> {
   return new Promise((resolve) => {
@@ -20,37 +21,42 @@ function getProcessMemoryBytes(pid: number): Promise<number> {
   });
 }
 
-interface ChromeSlot {
+interface HeadfulChromeSlot {
   id: string;
   context: BrowserContext;
   page: Page;
   manager: ChromeManager;
 }
 
-export class ChromePool {
+export class HeadfulChromePool {
   private browser: Browser | null = null;
-  private available: ChromeSlot[] = [];
-  private inUse: Map<string, ChromeSlot> = new Map();
-  private waitQueue: Array<(slot: ChromeSlot) => void> = [];
+  private available: HeadfulChromeSlot[] = [];
+  private inUse: Map<string, HeadfulChromeSlot> = new Map();
+  private waitQueue: Array<(slot: HeadfulChromeSlot) => void> = [];
+  private displayHandle: DisplayHandle | null = null;
 
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser && this.browser.connected) return this.browser;
 
-    log.info('chrome-pool', 'Launching Chrome browser');
+    log.info('headful-chrome-pool', 'Launching headful Chrome browser');
+    if (!this.displayHandle) {
+      this.displayHandle = await ensureDisplay();
+    }
+
     this.browser = await puppeteer.launch({
-      headless: true as any,
+      headless: false,
       protocolTimeout: 30000,
       args: [
         '--no-sandbox', '--disable-dev-shm-usage',
         '--no-first-run', '--disable-extensions', '--disable-background-networking',
         '--disable-default-apps', '--disable-sync', '--disable-translate',
         '--metrics-recording-only', '--mute-audio',
-        ...getAntiDetectionArgs(true),
+        ...getAntiDetectionArgs(false),
       ],
     });
 
     this.browser.on('disconnected', () => {
-      log.warn('chrome-pool', 'Chrome browser disconnected');
+      log.warn('headful-chrome-pool', 'Headful Chrome browser disconnected');
       this.browser = null;
       this.available = [];
       this.inUse.clear();
@@ -59,31 +65,31 @@ export class ChromePool {
     return this.browser;
   }
 
-  async acquire(sessionId: string): Promise<ChromeSlot> {
+  async acquire(sessionId: string): Promise<HeadfulChromeSlot> {
     if (this.inUse.has(sessionId)) {
-      log.debug(sessionId, `Reusing existing Chrome slot`);
+      log.debug(sessionId, `Reusing existing headful Chrome slot`);
       return this.inUse.get(sessionId)!;
     }
 
     if (this.available.length > 0) {
       const slot = this.available.pop()!;
-      log.info(sessionId, `Acquired Chrome slot ${slot.id}`);
+      log.info(sessionId, `Acquired headful Chrome slot ${slot.id}`);
       this.inUse.set(sessionId, slot);
       return slot;
     }
 
     const total = this.inUse.size + this.available.length;
     if (total < MAX_SIZE) {
-      log.info(sessionId, `Creating new Chrome slot`);
+      log.info(sessionId, `Creating new headful Chrome slot`);
       const slot = await this.createSlot();
       this.inUse.set(sessionId, slot);
       return slot;
     }
 
-    log.warn(sessionId, `All Chrome slots in use, waiting`);
+    log.warn(sessionId, `All headful Chrome slots in use, waiting`);
     return new Promise((resolve) => {
       this.waitQueue.push((slot) => {
-        log.info(sessionId, `Got Chrome slot ${slot.id} from wait queue`);
+        log.info(sessionId, `Got headful Chrome slot ${slot.id} from wait queue`);
         this.inUse.set(sessionId, slot);
         resolve(slot);
       });
@@ -112,11 +118,11 @@ export class ChromePool {
         this.available.push(newSlot);
       }
     } catch (e) {
-      console.error('[chrome-pool] Failed to recycle slot:', (e as Error).message);
+      console.error('[headful-chrome-pool] Failed to recycle slot:', (e as Error).message);
     }
   }
 
-  private async recycleSlot(slot: ChromeSlot): Promise<ChromeSlot | null> {
+  private async recycleSlot(slot: HeadfulChromeSlot): Promise<HeadfulChromeSlot | null> {
     try { await slot.page.close(); } catch (e) {}
     try { await slot.context.close(); } catch (e) {}
 
@@ -125,18 +131,18 @@ export class ChromePool {
     try {
       return await this.createSlot();
     } catch (e) {
-      console.error('[chrome-pool] Failed to recycle slot:', (e as Error).message);
+      console.error('[headful-chrome-pool] Failed to recycle slot:', (e as Error).message);
       return null;
     }
   }
 
-  private async createSlot(): Promise<ChromeSlot> {
+  private async createSlot(): Promise<HeadfulChromeSlot> {
     const browser = await this.ensureBrowser();
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     await applyStealthToPage(page);
-    const id = `chrome-ctx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    log.info('chrome-pool', `Created slot ${id}`);
+    const id = `headful-chrome-ctx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    log.info('headful-chrome-pool', `Created slot ${id}`);
     const manager = new ChromeManager({ browser, context, page });
     return { id, context, page, manager };
   }
@@ -157,6 +163,10 @@ export class ChromePool {
     this.available = [];
     this.inUse.clear();
     this.waitQueue = [];
+    if (this.displayHandle) {
+      this.displayHandle.kill();
+      this.displayHandle = null;
+    }
   }
 
   async getStats() {
@@ -182,7 +192,7 @@ export class ChromePool {
     this.available = this.available.filter(slot => activeSlotIds.has(slot.id));
 
     for (const slot of toKill) {
-      log.info('chrome-pool', `Killing orphaned Chrome slot ${slot.id}`);
+      log.info('headful-chrome-pool', `Killing orphaned headful Chrome slot ${slot.id}`);
       try { await slot.page.close(); } catch (e) {}
       try { await slot.context.close(); } catch (e) {}
     }
