@@ -259,6 +259,12 @@ export class PuppeteerMCPServer {
     log.info(sessionId, `Executing ${toolName}`);
 
     if (!this.sessionManager.has(sessionId)) {
+      if (toolName !== 'browser_navigate') {
+        return {
+          content: [{ type: 'text', text: `session_id: ${sessionId}\nresult: Session not found. Call browser_navigate first to create a session.` }],
+          isError: true,
+        };
+      }
       const preferChrome = this.sessionManager.shouldPreferChrome(sessionId);
       log.info(sessionId, `New session, acquiring browser (chrome=${preferChrome})`);
       await this.sessionManager.acquire(sessionId, preferChrome);
