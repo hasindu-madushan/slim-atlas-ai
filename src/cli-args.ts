@@ -14,6 +14,7 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'navigate-timeout': 'NAVIGATE_TIMEOUT',
   'snapshot-flatten': 'SNAPSHOT_FLATTEN',
   'snapshot-text-trim-length': 'SNAPSHOT_TEXT_TRIM_LENGTH',
+  'skip-headless-domains': 'SKIP_HEADLESS_DOMAINS',
 };
 
 const BOOLEAN_FLAGS = new Set([

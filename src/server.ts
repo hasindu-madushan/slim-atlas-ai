@@ -11,6 +11,19 @@ import type { PageInfo } from './types.js';
 
 const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
 const DEFAULT_WAIT_UNTIL = process.env.NAVIGATE_WAIT_UNTIL || 'domcontentloaded';
+const SKIP_HEADLESS_DOMAINS = (process.env.SKIP_HEADLESS_DOMAINS || '')
+  .split(',')
+  .map(d => d.trim().toLowerCase())
+  .filter(Boolean);
+
+function shouldSkipHeadless(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return SKIP_HEADLESS_DOMAINS.some(d => h === d || h.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
 
 const SESSION_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -266,13 +279,25 @@ export class PuppeteerMCPServer {
         };
       }
       const preferChrome = this.sessionManager.shouldPreferChrome(sessionId);
-      log.info(sessionId, `New session, acquiring browser (chrome=${preferChrome})`);
-      await this.sessionManager.acquire(sessionId, preferChrome);
+      const preferHeadful = shouldSkipHeadless(args.url);
+      if (preferHeadful) {
+        log.info(sessionId, `Skip-headless domain matched for ${new URL(args.url).hostname}`);
+      }
+      log.info(sessionId, `New session, acquiring browser (chrome=${preferChrome}, headful=${preferHeadful})`);
+      await this.sessionManager.acquire(sessionId, preferChrome, preferHeadful);
     }
 
     let manager = this.sessionManager.getManager(sessionId);
     if (!manager) {
       manager = await this.sessionManager.acquire(sessionId, this.sessionManager.shouldPreferChrome(sessionId));
+    }
+
+    if (toolName === 'browser_navigate' && args.url && shouldSkipHeadless(args.url)) {
+      const currentType = this.sessionManager.getBrowserType(sessionId);
+      if (currentType !== 'headful' && CHROME_ENABLED) {
+        log.info(sessionId, `Skip-headless domain matched for ${new URL(args.url).hostname}, switching to headful Chrome`);
+        manager = await this.sessionManager.acquire(sessionId, false, true);
+      }
     }
 
     try {
