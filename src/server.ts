@@ -337,9 +337,17 @@ export class PuppeteerMCPServer {
       }
 
       case 'browser_snapshot': {
-        const check = browserType === 'lightpanda'
+        let check = browserType === 'lightpanda'
           ? await this.checkBotDetectionLightpanda(manager)
           : await this.checkBotDetectionChrome(manager);
+
+        if (check.blocked && CHROME_ENABLED && browserType === 'lightpanda') {
+          log.warn(sessionId, `Page degraded on Lightpanda during snapshot (${check.reason}), switching to Chrome`);
+          this.sessionManager.markPreferChrome(sessionId);
+          manager = await this.sessionManager.acquire(sessionId, true);
+          check = await this.checkBotDetectionChrome(manager);
+        }
+
         if (check.blocked && check.certain) {
           let title = '';
           let url = '';
@@ -480,6 +488,7 @@ export class PuppeteerMCPServer {
     elCount: number,
     title: string,
     hostname: string,
+    strictNearEmpty: boolean = false,
   ): { blocked: boolean; certain: boolean; reason: string } {
     const STRONG_MARKERS = [
       'cf-chl-bypass', 'cdn-cgi/challenge-platform', 'px-captcha',
@@ -505,6 +514,13 @@ export class PuppeteerMCPServer {
 
     const isNearEmpty = bodyText.length < 50 && elCount < 20;
     if (isNearEmpty) {
+      if (strictNearEmpty) {
+        return {
+          blocked: true,
+          certain: true,
+          reason: `near-empty body (${bodyText.length} chars, ${elCount} elements; title="${t}")`,
+        };
+      }
       const isBareTitle = t === '' || t === hostname || t.length < 4;
       const isChallengeTitle = CHALLENGE_TITLE_FRAGMENT.test(t);
       const hasWeakMarker = WEAK_MARKERS.some((m) => html.includes(m));
@@ -548,7 +564,7 @@ export class PuppeteerMCPServer {
           };
         })()
       `) as { html: string; bodyText: string; elCount: number; title: string; hostname: string };
-      return this.analyzeBotSignals(info.html, info.bodyText, info.elCount, info.title, info.hostname);
+      return this.analyzeBotSignals(info.html, info.bodyText, info.elCount, info.title, info.hostname, true);
     } catch (e: any) {
       return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
     }
