@@ -12,6 +12,16 @@ const __dirname = path.dirname(__filename);
 const BASE_PORT = parseInt(process.env.LIGHTPANDA_BASE_PORT || '9222', 10);
 const MAX_SIZE = parseInt(process.env.LIGHTPANDA_POOL_SIZE || '5', 10);
 
+// ponytail: pure builder so spawn args are unit-testable without launching the binary.
+export function buildLightpandaServeArgs(port: number, proxy?: string): string[] {
+  const args = [
+    'serve', '--log_level', 'warn',
+    '--host', '127.0.0.1', '--port', port.toString(), '--timeout', '86400',
+  ];
+  if (proxy) args.push('--http-proxy', proxy);
+  return args;
+}
+
 interface LightpandaInstance {
   id: string;
   port: number;
@@ -149,10 +159,7 @@ export class LightpandaPool {
     await new Promise((r) => setTimeout(r, 200));
 
     log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
-    const proc = spawn(lightpandaPath, [
-      'serve', '--log_level', 'warn',
-      '--host', '127.0.0.1', '--port', port.toString(), '--timeout', '86400',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(lightpandaPath, buildLightpandaServeArgs(port, process.env.PROXY_SERVER), { stdio: ['ignore', 'pipe', 'pipe'] });
 
     proc.on('error', (err) => log.error('pool', `${id} error: ${err.message}`));
     proc.on('exit', (code) => {

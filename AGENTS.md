@@ -20,7 +20,7 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 
 The server is a strict **2-level** model. Level 1 is always Lightpanda; level 2 is a single configurable fallback browser.
 
-- **Level 1 — Lightpanda (always, not configurable).** The binary lives at repo root as `lightpanda` and is auto-downloaded on first run if missing. It is gitignored. New sessions always start here.
+- **Level 1 — Lightpanda (always, not configurable).** The binary lives at repo root as `lightpanda` and is auto-downloaded on first run if missing. It is gitignored. New sessions always start here. `PROXY_SERVER` is forwarded via its `--http-proxy` flag (see `buildLightpandaServeArgs` in `src/pool.ts`), so proxying applies to this layer too.
 - **Level 2 — `FALLBACK_BROWSER`.** One of `headless` | `headful` | `browserbase` | `none` (default `none`). Configured via env or `--fallback-browser`. Only the **one** configured pool is constructed, lazily (it spawns nothing until a session actually escalates).
   - `headless` → `ChromePool` (headless Chrome via puppeteer-extra + stealth).
   - `headful` → `HeadfulChromePool`. On macOS it opens a real visible window (dev-only). On headless Linux without `DISPLAY` it lazily spawns `Xvfb` on a free display (`:99`, scanning up to `:103`) and tears it down at shutdown; if `Xvfb` is not installed (`apt-get install xvfb`) escalation fails with an honest `isError`.
@@ -87,7 +87,12 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
   - `NAVIGATE_WAIT_UNTIL=domcontentloaded`, `NAVIGATE_TIMEOUT=30000`
   - `LIGHTPANDA_POOL_SIZE=5`, `CHROME_POOL_SIZE=1`, `HEADFUL_CHROME_POOL_SIZE` defaults to `CHROME_POOL_SIZE`
   - `CLEANUP_INTERVAL_MS=600000`, `SESSION_IDLE_TIMEOUT_MS=300000`
+  - Rate limiting: `RATE_LIMIT_DOMAINS=` (empty), `RATE_LIMIT_MIN_DELAY_MS=0`, `RATE_LIMIT_JITTER_MS=0`
   - Browserbase (only when `FALLBACK_BROWSER=browserbase`): `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSERBASE_POOL_SIZE`, `BROWSERBASE_API_URL=https://api.browserbase.com/v1`, `BROWSERBASE_CONNECT_HOST=wss://connect.browserbase.com`
+
+### Rate limiting (`src/rate-limit.ts`)
+
+`RateLimiter` enforces a server-wide minimum delay between `browser_navigate` calls to configured domains; patterns support wildcards (`*` = all hosts each throttled independently, `*.reddit.com` = subdomains only grouped under the suffix, literal = apex+subdomains sharing one bucket). Disabled unless both `RATE_LIMIT_DOMAINS` is non-empty and `RATE_LIMIT_MIN_DELAY_MS > 0`; `RATE_LIMIT_JITTER_MS` adds fresh `0..N` ms per hit so pacing isn't a fixed interval.
 
 ### Removed config (migration notes)
 

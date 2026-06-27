@@ -26,6 +26,8 @@
 - **Lightweight by Default**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
 - **Configurable Fallback Browser**: Two-level model — Lightpanda first, then escalate to **headless Chrome**, **headful Chrome**, or **Browserbase** cloud browsers when Lightpanda crashes, times out, or is bot-detected. Disable with `FALLBACK_BROWSER=none`.
 - **Per-Domain Routing**: List known-hard sites (`SKIP_LIGHTPANDA_DOMAINS`) that skip Lightpanda and start directly on the fallback browser.
+- **Rate Limiting**: Stay under the radar. Enforce a configurable minimum delay between requests to specific domains with wildcard patterns (`*`, `*.reddit.com`) plus optional jitter, so your agent paces itself instead of hammering a site and tripping its bot defenses.
+- **Proxy Support**: Route every request through an HTTP proxy with a single `PROXY_SERVER` setting — applied automatically to **both** browser layers (Lightpanda and the Chrome fallback), so your real IP never touches the target. Supports inline basic auth (`http://user:pass@host:port`).
 - **Robust Session Management**: Per-session serialization, optional session cap (`MAX_SESSIONS`), mid-session crash recovery with history replay, and graceful shutdown.
 - **Session Management**: Reuse sessions across multiple operations with unique session IDs
 - **Cross-Platform**: Works on macOS and Linux (Lightpanda), with a configurable real-browser fallback when needed
@@ -88,6 +90,45 @@ Add to your MCP client configuration:
 | `browserbase` | Browserbase cloud | Requires `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` |
 
 **Skip Lightpanda for known-hard domains** with `SKIP_LIGHTPANDA_DOMAINS` (comma-separated, subdomain-aware). Matched hosts start directly on the fallback browser. Requires `FALLBACK_BROWSER != none` (otherwise the list is ignored with a warning).
+
+### Rate limiting
+
+Polite, anti-detection pacing for your agent. `RateLimiter` enforces a server-wide minimum delay between `browser_navigate` calls to the domains you list, with optional random jitter so the cadence isn't a fixed, fingerprintable interval. Buckets are keyed per host across **all** sessions (because the target site sees your IP, not your sessions), and patterns support wildcards:
+
+| Pattern | Matches | Bucket |
+|---|---|---|
+| `*` | Every host | Each host throttled independently |
+| `*.reddit.com` | Subdomains only (`www.reddit.com`, `old.reddit.com`) — **not** `reddit.com` | All matching subdomains share one bucket |
+| `g2.com` | `g2.com` + its subdomains | Apex + subdomains share one bucket |
+
+Disabled by default. Enable with a non-empty domain list **and** a non-zero delay:
+
+```bash
+# Via CLI flags
+npx tsx src/index.ts --rate-limit-domains=*.reddit.com,g2.com --rate-limit-min-delay-ms=2000 --rate-limit-jitter-ms=1500
+
+# Or via environment / .env
+RATE_LIMIT_DOMAINS=*.reddit.com,g2.com
+RATE_LIMIT_MIN_DELAY_MS=2000
+RATE_LIMIT_JITTER_MS=1500
+```
+
+### Proxy
+
+Keep your real IP off the target. Set a single `PROXY_SERVER` and SlimAtlas routes **all** HTTP traffic from **both** browser layers through it — no per-browser wiring needed:
+
+- **Lightpanda (level 1)** — forwarded via its native `--http-proxy` flag.
+- **Chrome fallback (level 2)** — applied via `--proxy-server` at launch.
+
+```bash
+# Via CLI flag
+npx tsx src/index.ts --proxy-server=http://host:8080
+
+# Or via environment / .env
+PROXY_SERVER=http://user:pass@host:8080
+```
+
+Inline basic auth (`http://user:pass@host:port`) is supported on the Lightpanda layer. For IP-allowlisted proxies (no credentials) it just works on both layers. *(Per-page Chrome authentication via `page.authenticate` is on the roadmap.)*
 
 ### CLI Flags
 

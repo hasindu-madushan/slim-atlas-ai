@@ -187,5 +187,18 @@ export class ChromePool implements FallbackPool {
       try { await slot.page.close(); } catch (e) {}
       try { await slot.context.close(); } catch (e) {}
     }
+
+    // ponytail: no live session is on the fallback -> drop the shared browser too.
+    // Reuses the existing cleanup tick; browser relaunches on next acquire().
+    if (activeSlotIds.size === 0 && this.inUse.size === 0 && this.browser) {
+      log.info('chrome-pool', 'No active fallback sessions; tearing down idle Chrome browser');
+      for (const slot of this.available) {
+        try { await slot.page.close(); } catch (e) {}
+        try { await slot.context.close(); } catch (e) {}
+      }
+      this.available = [];
+      try { await this.browser.close(); } catch (e) {}
+      this.browser = null;
+    }
   }
 }

@@ -19,7 +19,6 @@ const VIEWPORT_POOL = [
 export interface StealthConfig {
   userAgent: string | null;
   viewport: { width: number; height: number };
-  proxy: string | null;
   typingDelay: { min: number; max: number };
   clickDelay: { min: number; max: number };
 }
@@ -35,12 +34,10 @@ function getRandomInt(min: number, max: number): number {
 export function getStealthConfig(): StealthConfig {
   const userAgent = process.env.USER_AGENT || null;
   const viewport = getRandomElement(VIEWPORT_POOL);
-  const proxy = process.env.PROXY_SERVER || null;
 
   return {
     userAgent,
     viewport,
-    proxy,
     typingDelay: { min: 50, max: 150 },
     clickDelay: { min: 100, max: 300 },
   };
