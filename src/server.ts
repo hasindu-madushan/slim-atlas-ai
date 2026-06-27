@@ -4,28 +4,27 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import fastq from 'fastq';
+import type { queueAsPromised } from 'fastq';
 import { SessionManager } from './session.js';
+import { BotDetectionService } from './bot-detection.js';
 import { log } from './logger.js';
 import type { ChromeManager } from './chrome.js';
 import type { PageInfo } from './types.js';
 
-const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
 const DEFAULT_WAIT_UNTIL = process.env.NAVIGATE_WAIT_UNTIL || 'domcontentloaded';
-const SKIP_HEADLESS_DOMAINS = (process.env.SKIP_HEADLESS_DOMAINS || '')
+const SKIP_LIGHTPANDA_DOMAINS = (process.env.SKIP_LIGHTPANDA_DOMAINS || '')
   .split(',')
   .map(d => d.trim().toLowerCase())
   .filter(Boolean);
 
-function shouldSkipHeadless(url: string): boolean {
-  try {
-    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-    return SKIP_HEADLESS_DOMAINS.some(d => h === d || h.endsWith('.' + d));
-  } catch {
-    return false;
-  }
-}
-
 const SESSION_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+interface ToolTask {
+  sessionId: string;
+  toolName: string;
+  args: Record<string, any>;
+}
 
 function generateSessionId(): string {
   let id = '';
@@ -33,8 +32,18 @@ function generateSessionId(): string {
   return id;
 }
 
+function shouldSkipLightpanda(url: string): boolean {
+  if (SKIP_LIGHTPANDA_DOMAINS.length === 0) return false;
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return SKIP_LIGHTPANDA_DOMAINS.some(d => h === d || h.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
+
 function isCrashError(error: any): boolean {
-  const msg = (error?.message || error || '').toLowerCase();
+  const msg = errMsg(error);
   return (
     msg.includes('target closed') ||
     msg.includes('session closed') ||
@@ -46,6 +55,18 @@ function isCrashError(error: any): boolean {
   );
 }
 
+function isTimeoutError(error: any): boolean {
+  return errMsg(error).includes('timeout') || errMsg(error).includes('timed out');
+}
+
+function isCrashOrTimeout(error: any): boolean {
+  return isCrashError(error) || isTimeoutError(error);
+}
+
+function errMsg(error: any): string {
+  return (error?.message || error || '').toString().toLowerCase();
+}
+
 function normalizeNodeId(args: Record<string, any>): number | undefined {
   if (args.nodeId !== undefined) return Number(args.nodeId);
   if (args.node_id !== undefined) return Number(args.node_id);
@@ -54,8 +75,9 @@ function normalizeNodeId(args: Record<string, any>): number | undefined {
 
 export class PuppeteerMCPServer {
   private server: Server;
-  private sessionManager: SessionManager;
-  private sessionQueues: Map<string, Promise<void>> = new Map();
+  private sessionManager: SessionManager = new SessionManager();
+  private botDetection: BotDetectionService = new BotDetectionService();
+  private sessionQueues: Map<string, queueAsPromised<ToolTask>> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -63,10 +85,12 @@ export class PuppeteerMCPServer {
       { name: 'slimatlas', version: '1.0.0' },
       { capabilities: { tools: {} } }
     );
-    this.sessionManager = new SessionManager();
     this.setupHandlers();
     this.startCleanupJob();
-    log.info('server', `Initialized. Log file: ${log.getPath()}`);
+    if (SKIP_LIGHTPANDA_DOMAINS.length > 0 && !this.sessionManager.hasFallback()) {
+      log.warn('server', `SKIP_LIGHTPANDA_DOMAINS set but FALLBACK_BROWSER=none — per-domain skipping is disabled`);
+    }
+    log.info('server', `Initialized (fallback=${this.sessionManager.getFallbackType()}). Log file: ${log.getPath()}`);
   }
 
   private setupHandlers(): void {
@@ -156,17 +180,6 @@ export class PuppeteerMCPServer {
               required: ['session_id', 'selector', 'value'],
             },
           },
-          // {
-          //   name: 'browser_evaluate',
-          //   description: 'Evaluate JavaScript on the page',
-          //   inputSchema: {
-          //     type: 'object',
-          //     properties: {
-          //       script: { type: 'string', description: 'JavaScript code to evaluate' },
-          //     },
-          //     required: ['script'],
-          //   },
-          // },
           {
             name: 'browser_go_back',
             description: 'Navigate back in history',
@@ -228,251 +241,219 @@ export class PuppeteerMCPServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const toolName = request.params.name;
       const args = request.params.arguments as Record<string, any>;
-      const needsBrowser = toolName !== 'browser_install';
 
-      if (needsBrowser) {
-        if (!args.session_id && toolName !== 'browser_navigate') {
-          return {
-            content: [{ type: 'text', text: `session_id: ERROR\nresult: session_id is required for ${toolName}` }],
-            isError: true,
-          };
-        }
-
-        if (!args.session_id) {
-          let sessionId = generateSessionId();
-          while (this.sessionManager.has(sessionId)) {
-            sessionId = generateSessionId();
-          }
-          args.session_id = sessionId;
-        }
-
-        const sessionId = args.session_id;
-
-        return new Promise((resolve) => {
-          const prev = this.sessionQueues.get(sessionId) || Promise.resolve();
-          const next = prev.then(async () => {
-            const result = await this.executeTool(sessionId, toolName, args);
-            resolve(result);
-          }).catch(async (err) => {
-            console.error(`[session:${sessionId}] Queue error:`, err.message);
-            await this.sessionManager.release(sessionId).catch(() => {});
-            this.sessionQueues.delete(sessionId);
-            const result = await this.executeTool(sessionId, toolName, args);
-            resolve(result);
-          });
-          this.sessionQueues.set(sessionId, next);
-        });
+      if (!args.session_id && toolName !== 'browser_navigate') {
+        return this.textResult('', `session_id is required for ${toolName}`, true);
       }
 
-      return this.executeTool('default', toolName, args);
+      if (!args.session_id) {
+        let sessionId = generateSessionId();
+        while (this.sessionManager.has(sessionId)) sessionId = generateSessionId();
+        args.session_id = sessionId;
+      }
+
+      const sessionId = args.session_id;
+      return this.getQueue(sessionId).push({ sessionId, toolName, args });
     });
+  }
+
+  private getQueue(sessionId: string): queueAsPromised<ToolTask> {
+    let q = this.sessionQueues.get(sessionId);
+    if (!q) {
+      q = fastq.promise(async (task: ToolTask) => {
+        return this.executeTool(task.sessionId, task.toolName, task.args);
+      }, 1);
+      this.sessionQueues.set(sessionId, q);
+    }
+    return q;
   }
 
   private async executeTool(sessionId: string, toolName: string, args: Record<string, any>): Promise<any> {
     log.info(sessionId, `Executing ${toolName}`);
-
-    if (!this.sessionManager.has(sessionId)) {
-      if (toolName !== 'browser_navigate') {
-        return {
-          content: [{ type: 'text', text: `session_id: ${sessionId}\nresult: Session not found. Call browser_navigate first to create a session.` }],
-          isError: true,
-        };
-      }
-      const preferChrome = this.sessionManager.shouldPreferChrome(sessionId);
-      const preferHeadful = shouldSkipHeadless(args.url);
-      if (preferHeadful) {
-        log.info(sessionId, `Skip-headless domain matched for ${new URL(args.url).hostname}`);
-      }
-      log.info(sessionId, `New session, acquiring browser (chrome=${preferChrome}, headful=${preferHeadful})`);
-      await this.sessionManager.acquire(sessionId, preferChrome, preferHeadful);
-    }
-
-    let manager = this.sessionManager.getManager(sessionId);
-    if (!manager) {
-      manager = await this.sessionManager.acquire(sessionId, this.sessionManager.shouldPreferChrome(sessionId));
-    }
-
-    if (toolName === 'browser_navigate' && args.url && shouldSkipHeadless(args.url)) {
-      const currentType = this.sessionManager.getBrowserType(sessionId);
-      if (currentType !== 'headful' && CHROME_ENABLED) {
-        log.info(sessionId, `Skip-headless domain matched for ${new URL(args.url).hostname}, switching to headful Chrome`);
-        manager = await this.sessionManager.acquire(sessionId, false, true);
-      }
-    }
-
     try {
+      if (!this.sessionManager.has(sessionId)) {
+        if (toolName !== 'browser_navigate') {
+          return this.textResult(sessionId, 'Session not found. Call browser_navigate first to create a session.', true);
+        }
+        await this.sessionManager.acquire(sessionId);
+      }
+
+      const manager = await this.sessionManager.ensureConnected(sessionId);
       const result = await this.executeWithManager(sessionId, manager, toolName, args);
-      log.info(sessionId, `${toolName} completed`);
       this.sessionManager.touchSession(sessionId);
+      log.info(sessionId, `${toolName} completed`);
       return result;
     } catch (error: any) {
-      if (CHROME_ENABLED && isCrashError(error) && this.sessionManager.getBrowserType(sessionId) === 'lightpanda') {
-        log.warn(sessionId, `Lightpanda crashed on ${toolName}, switching to Chrome`);
-        this.sessionManager.markPreferChrome(sessionId);
-        manager = await this.sessionManager.acquire(sessionId, true);
-        const result = await this.executeWithManager(sessionId, manager, toolName, args);
-        log.info(sessionId, `${toolName} completed (after Chrome fallback)`);
-        this.sessionManager.touchSession(sessionId);
-        return result;
-      }
-      log.error(sessionId, `${toolName} failed: ${error instanceof Error ? error.message : String(error)}`);
-      return {
-        content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
-        isError: true,
-      };
+      const msg = error instanceof Error ? error.message : String(error);
+      log.error(sessionId, `${toolName} failed: ${msg}`);
+      return this.textResult(sessionId, `Error: ${msg}`, true);
     }
   }
 
+  private browserTag(sessionId: string): string {
+    return this.sessionManager.isOnLightpanda(sessionId) ? 'lightpanda' : this.sessionManager.getFallbackType();
+  }
+
+  // Navigate on the current manager; escalate to the fallback pool exactly once
+  // when Lightpanda crashes/times out or the page is bot-detected. Level 2 is
+  // trusted: no detection, no further escalation.
+  private async navigateOn(
+    sessionId: string,
+    manager: ChromeManager,
+    url: string,
+    waitUntil: string,
+  ): Promise<ChromeManager> {
+    let current = manager;
+    try {
+      await current.navigate({ url, waitUntil: waitUntil as any });
+    } catch (navError: any) {
+      if (!this.sessionManager.isOnLightpanda(sessionId) || !isCrashOrTimeout(navError) || !this.sessionManager.hasFallback()) {
+        throw navError;
+      }
+      log.warn(sessionId, `Lightpanda navigate failed (${errMsg(navError)}), escalating to ${this.sessionManager.getFallbackType()}`);
+      current = await this.sessionManager.switchToFallback(sessionId);
+      await current.navigate({ url, waitUntil: waitUntil as any });
+      return current;
+    }
+
+    if (this.sessionManager.isOnLightpanda(sessionId)) {
+      const check = await this.botDetection.detect(current.getPage());
+      if (check.blocked) {
+        if (!this.sessionManager.hasFallback()) {
+          throw new Error(`Bot challenge detected (${check.reason}). No fallback configured (FALLBACK_BROWSER=none).`);
+        }
+        log.warn(sessionId, `Bot challenge on lightpanda (${check.reason}), escalating to ${this.sessionManager.getFallbackType()}`);
+        current = await this.sessionManager.switchToFallback(sessionId);
+        await current.navigate({ url, waitUntil: waitUntil as any });
+      }
+    }
+    return current;
+  }
+
   private async executeWithManager(sessionId: string, manager: ChromeManager, toolName: string, args: Record<string, any>): Promise<any> {
-    const browserType = this.sessionManager.getBrowserType(sessionId) || 'lightpanda';
-    const prefix = `session_id: ${sessionId}`;
     log.debug(sessionId, `${toolName} args: ${JSON.stringify(args)}`);
 
     switch (toolName) {
       case 'browser_navigate': {
-        const navResult = await this.navigateWithBotCheck(
-          sessionId,
-          manager,
-          args.url,
-          args.waitUntil || DEFAULT_WAIT_UNTIL,
-          browserType
-        );
-        if (!navResult.ok) {
-          return {
-            content: [{ type: 'text', text: `${prefix}\nresult: ${navResult.message}` }],
-            isError: true,
-          };
-        }
-        manager = navResult.manager;
+        const url = args.url;
+        const waitUntil = args.waitUntil || DEFAULT_WAIT_UNTIL;
 
-        this.sessionManager.getHistory(sessionId)?.record({ type: 'navigate', url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
+        if (this.sessionManager.isOnLightpanda(sessionId) && this.sessionManager.hasFallback() && shouldSkipLightpanda(url)) {
+          log.info(sessionId, `Skip-lightpanda domain (${new URL(url).hostname}), starting on fallback (${this.sessionManager.getFallbackType()})`);
+          manager = await this.sessionManager.switchToFallback(sessionId);
+        }
+
+        manager = await this.navigateOn(sessionId, manager, url, waitUntil);
+        this.sessionManager.getHistory(sessionId)?.record({ type: 'navigate', url, waitUntil });
 
         let info: PageInfo;
         try {
           info = await manager.getPageInfo();
-        } catch (infoError: any) {
-          const infoMsg = (infoError?.message || '').toLowerCase();
-          if ((infoMsg.includes('timeout') || infoMsg.includes('timed out')) && this.sessionManager.getBrowserType(sessionId) === 'lightpanda' && CHROME_ENABLED) {
-            log.warn(sessionId, `getPageInfo timed out on Lightpanda, switching to Chrome`);
-            this.sessionManager.markPreferChrome(sessionId);
-            manager = await this.sessionManager.acquire(sessionId, true);
-            await manager.navigate({ url: args.url, waitUntil: args.waitUntil || DEFAULT_WAIT_UNTIL });
+        } catch (e: any) {
+          if (this.sessionManager.isOnLightpanda(sessionId) && isTimeoutError(e) && this.sessionManager.hasFallback()) {
+            log.warn(sessionId, `getPageInfo timed out on lightpanda, escalating to ${this.sessionManager.getFallbackType()}`);
+            manager = await this.sessionManager.switchToFallback(sessionId);
+            await manager.navigate({ url, waitUntil: waitUntil as any });
             info = await manager.getPageInfo();
           } else {
-            throw infoError;
+            throw e;
           }
         }
 
         await this.sessionManager.logResourceUsage();
-        return { content: [{ type: 'text', text: `${prefix}\nresult: [${this.sessionManager.getBrowserType(sessionId)}] Navigated to ${info.url}. Title: ${info.title}` }] };
+        return this.textResult(sessionId, `[${this.browserTag(sessionId)}] Navigated to ${info.url}. Title: ${info.title}`);
       }
 
       case 'browser_snapshot': {
-        let check = browserType === 'lightpanda'
-          ? await this.checkBotDetectionLightpanda(manager)
-          : await this.checkBotDetectionChrome(manager);
-
-        if (check.blocked && CHROME_ENABLED && browserType === 'lightpanda') {
-          log.warn(sessionId, `Page degraded on Lightpanda during snapshot (${check.reason}), switching to Chrome`);
-          this.sessionManager.markPreferChrome(sessionId);
-          manager = await this.sessionManager.acquire(sessionId, true);
-          check = await this.checkBotDetectionChrome(manager);
-        }
-
-        if (check.blocked && check.certain) {
-          let title = '';
-          let url = '';
-          try {
-            const info = await manager.getPageInfo();
-            title = info.title;
-            url = info.url;
-          } catch {}
-          return {
-            content: [{ type: 'text', text: `${prefix}\nresult: Bot challenge detected (${check.reason}). Snapshot empty. url=${url} title="${title}"` }],
-            isError: true,
-          };
+        if (this.sessionManager.isOnLightpanda(sessionId)) {
+          const check = await this.botDetection.detect(manager.getPage());
+          if (check.blocked) {
+            if (!this.sessionManager.hasFallback()) {
+              return this.textResult(sessionId, `Bot challenge detected (${check.reason}). No fallback configured (FALLBACK_BROWSER=none).`, true);
+            }
+            log.warn(sessionId, `Bot challenge on lightpanda during snapshot (${check.reason}), escalating (history replayed)`);
+            manager = await this.sessionManager.switchToFallback(sessionId);
+          }
         }
         const snapshot = await manager.getSnapshot(args.show_urls === true);
-        return { content: [{ type: 'text', text: `${prefix}\nresult: ${snapshot.accessibilityTree}` }] };
+        return this.textResult(sessionId, snapshot.accessibilityTree);
       }
 
       case 'browser_view_node': {
-        const viewNodeId = normalizeNodeId(args);
-        const nodeResult = await manager.viewNode(viewNodeId!);
+        const nodeResult = await manager.viewNode(normalizeNodeId(args)!);
         if (nodeResult.type === 'image') return { content: [{ type: 'image', data: nodeResult.content, mimeType: 'image/png' }] };
-        return { content: [{ type: 'text', text: `${prefix}\nresult: ${nodeResult.content}` }] };
+        return this.textResult(sessionId, nodeResult.content);
       }
 
       case 'browser_click': {
-        const clickNodeId = normalizeNodeId(args);
-        let sel: string | null;
-        if (clickNodeId !== undefined) {
-          sel = await manager.getSelectorByNodeId(clickNodeId);
-        } else if (args.selector && /^\d+$/.test(String(args.selector))) {
-          sel = await manager.getSelectorByNodeId(Number(args.selector));
-        } else {
-          sel = args.selector ?? null;
-        }
-        if (!sel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${clickNodeId !== undefined ? `Node ID ${clickNodeId} not found` : 'Provide nodeId or selector'}` }] };
+        const sel = await this.resolveSelector(manager, args);
+        if (!sel) return this.textResult(sessionId, this.missingSelectorMsg(args), true);
         await manager.click(sel);
         this.sessionManager.getHistory(sessionId)?.record({ type: 'click', selector: sel });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Clicked: ${sel}` }] };
+        return this.textResult(sessionId, `Clicked: ${sel}`);
       }
 
       case 'browser_type': {
-        const typeNodeId = normalizeNodeId(args);
-        let typeSel: string | null;
-        if (typeNodeId !== undefined) {
-          typeSel = await manager.getSelectorByNodeId(typeNodeId);
-        } else if (args.selector && /^\d+$/.test(String(args.selector))) {
-          typeSel = await manager.getSelectorByNodeId(Number(args.selector));
-        } else {
-          typeSel = args.selector ?? null;
-        }
-        if (!typeSel) return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeNodeId !== undefined ? `Node ID ${typeNodeId} not found` : 'Provide nodeId or selector'}` }] };
-        await manager.type(typeSel, args.text, { delay: args.delay });
-        this.sessionManager.getHistory(sessionId)?.record({ type: 'type', selector: typeSel, text: args.text, delay: args.delay });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Typed into: ${typeSel}` }] };
+        const sel = await this.resolveSelector(manager, args);
+        if (!sel) return this.textResult(sessionId, this.missingSelectorMsg(args), true);
+        await manager.type(sel, args.text, { delay: args.delay });
+        this.sessionManager.getHistory(sessionId)?.record({ type: 'type', selector: sel, text: args.text, delay: args.delay });
+        return this.textResult(sessionId, `Typed into: ${sel}`);
       }
 
       case 'browser_fill':
         await manager.fill(args.selector, args.value);
         this.sessionManager.getHistory(sessionId)?.record({ type: 'fill', selector: args.selector, value: args.value });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Filled ${args.selector} with: ${args.value}` }] };
-
-      case 'browser_evaluate': {
-        const result = await manager.evaluate(args.script);
-        return { content: [{ type: 'text', text: `${prefix}\nresult: ${typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}` }] };
-      }
+        return this.textResult(sessionId, `Filled ${args.selector} with: ${args.value}`);
 
       case 'browser_go_back':
         await manager.goBack();
         this.sessionManager.getHistory(sessionId)?.record({ type: 'goBack' });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Navigated back` }] };
+        return this.textResult(sessionId, 'Navigated back');
 
       case 'browser_go_forward':
         await manager.goForward();
         this.sessionManager.getHistory(sessionId)?.record({ type: 'goForward' });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Navigated forward` }] };
+        return this.textResult(sessionId, 'Navigated forward');
 
       case 'browser_reload':
         await manager.reload();
         this.sessionManager.getHistory(sessionId)?.record({ type: 'reload' });
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Page reloaded` }] };
+        return this.textResult(sessionId, 'Page reloaded');
 
       case 'browser_get_page_info': {
         const page = await manager.getPageInfo();
-        return { content: [{ type: 'text', text: `${prefix}\nresult: ${JSON.stringify(page, null, 2)}` }] };
+        return this.textResult(sessionId, JSON.stringify(page, null, 2));
       }
 
       case 'browser_close':
         await this.sessionManager.release(sessionId);
         this.sessionQueues.delete(sessionId);
-        return { content: [{ type: 'text', text: `${prefix}\nresult: Session ${sessionId} closed` }] };
+        return this.textResult(sessionId, `Session ${sessionId} closed`);
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
+  }
+
+  private async resolveSelector(manager: ChromeManager, args: Record<string, any>): Promise<string | null> {
+    const nodeId = normalizeNodeId(args);
+    if (nodeId !== undefined) return manager.getSelectorByNodeId(nodeId);
+    if (args.selector && /^\d+$/.test(String(args.selector))) return manager.getSelectorByNodeId(Number(args.selector));
+    return args.selector ?? null;
+  }
+
+  private missingSelectorMsg(args: Record<string, any>): string {
+    const nodeId = normalizeNodeId(args);
+    return nodeId !== undefined ? `Node ID ${nodeId} not found` : 'Provide nodeId or selector';
+  }
+
+  private textResult(sessionId: string, body: string, isError = false): any {
+    const prefix = sessionId ? `session_id: ${sessionId}\n` : '';
+    return {
+      content: [{ type: 'text', text: `${prefix}result: ${body}` }],
+      isError,
+    };
   }
 
   private startCleanupJob(): void {
@@ -490,8 +471,7 @@ export class PuppeteerMCPServer {
           this.sessionQueues.delete(sessionId);
         }
 
-        const activeIds = this.sessionManager.getActiveSessionIds();
-        await this.sessionManager.purgeOrphanedInstances(activeIds);
+        await this.sessionManager.purgeOrphanedInstances(this.sessionManager.getActiveSessionIds());
 
         if (idleIds.length > 0) {
           log.info('cleanup', `Cleaned ${idleIds.length} idle session(s)`);
@@ -513,197 +493,11 @@ export class PuppeteerMCPServer {
     }
   }
 
-  private analyzeBotSignals(
-    html: string,
-    bodyText: string,
-    elCount: number,
-    title: string,
-    hostname: string,
-    strictNearEmpty: boolean = false,
-  ): { blocked: boolean; certain: boolean; reason: string } {
-    const STRONG_MARKERS = [
-      'cf-chl-bypass', 'cdn-cgi/challenge-platform', 'px-captcha',
-      'bm-challenge', '/_bm/', 'datadome',
-    ];
-    const WEAK_MARKERS = [
-      'cf-ray', 'challenge-platform', 'checking your browser',
-      'ddos protection', 'captcha', 'akamai', 'perimeterx',
-      'human verification', 'verify you are human', 'bot detection', 'attention required',
-    ];
-    const CHALLENGE_TITLE_PREFIX = /^(just a moment|checking your browser|access denied|ddos protection|human verification|verify you are human|attention required)\b/i;
-    const CHALLENGE_TITLE_FRAGMENT = /access denied|verify|checking|challenge|blocked|attention required/i;
-
-    const t = (title || '').trim();
-
-    for (const m of STRONG_MARKERS) {
-      if (html.includes(m)) return { blocked: true, certain: true, reason: `marker: ${m}` };
-    }
-
-    if (CHALLENGE_TITLE_PREFIX.test(t)) {
-      return { blocked: true, certain: true, reason: `challenge title: "${t}"` };
-    }
-
-    const isNearEmpty = bodyText.length < 50 && elCount < 20;
-    if (isNearEmpty) {
-      if (strictNearEmpty) {
-        return {
-          blocked: true,
-          certain: true,
-          reason: `near-empty body (${bodyText.length} chars, ${elCount} elements; title="${t}")`,
-        };
-      }
-      const isBareTitle = t === '' || t === hostname || t.length < 4;
-      const isChallengeTitle = CHALLENGE_TITLE_FRAGMENT.test(t);
-      const hasWeakMarker = WEAK_MARKERS.some((m) => html.includes(m));
-      if (isBareTitle || isChallengeTitle || hasWeakMarker) {
-        return {
-          blocked: true,
-          certain: true,
-          reason: `near-empty body (${bodyText.length} chars, ${elCount} elements; title="${t}")`,
-        };
-      }
-    }
-
-    return { blocked: false, certain: true, reason: '' };
-  }
-
-  private async checkBotDetectionLightpanda(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
-    try {
-      const page = manager.getPage();
-      const info = await page.evaluate(`
-        (function() {
-          var body = document.body;
-          function visibleText(el) {
-            var s = '', c = el.childNodes;
-            for (var i = 0; i < c.length; i++) {
-              var n = c[i];
-              if (n.nodeType === 3) s += n.textContent;
-              else if (n.nodeType === 1) {
-                var tag = n.tagName.toLowerCase();
-                if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') continue;
-                s += visibleText(n);
-              }
-            }
-            return s;
-          }
-          return {
-            html: document.documentElement.outerHTML.toLowerCase(),
-            bodyText: (body ? visibleText(body) : '').trim(),
-            elCount: body ? body.querySelectorAll('*').length : 0,
-            title: document.title,
-            hostname: location.hostname.replace(/^www\\./, ''),
-          };
-        })()
-      `) as { html: string; bodyText: string; elCount: number; title: string; hostname: string };
-      return this.analyzeBotSignals(info.html, info.bodyText, info.elCount, info.title, info.hostname, true);
-    } catch (e: any) {
-      return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
-    }
-  }
-
-  private async checkBotDetectionChrome(manager: ChromeManager): Promise<{ blocked: boolean; certain: boolean; reason: string }> {
-    try {
-      const page = manager.getPage();
-      const client = await page.createCDPSession();
-      const { root } = await client.send('DOM.getDocument' as any) as { root: { nodeId: number } };
-      const { outerHTML } = await client.send('DOM.getOuterHTML' as any, { nodeId: root.nodeId }) as { outerHTML: string };
-      await client.detach();
-      const html = outerHTML.toLowerCase();
-
-      const info = await page.evaluate(`
-        (function() {
-          var body = document.body;
-          var text = body ? (body.innerText || '') : '';
-          var elCount = body ? body.querySelectorAll('*').length : 0;
-          return {
-            bodyText: text.trim(),
-            elCount: elCount,
-            title: document.title,
-            hostname: location.hostname.replace(/^www\\./, ''),
-          };
-        })()
-      `) as { bodyText: string; elCount: number; title: string; hostname: string };
-
-      return this.analyzeBotSignals(html, info.bodyText, info.elCount, info.title, info.hostname);
-    } catch (e: any) {
-      return { blocked: true, certain: false, reason: `check failed: ${e?.message || e}` };
-    }
-  }
-
-  private async navigateWithBotCheck(
-    sessionId: string,
-    manager: ChromeManager,
-    url: string,
-    waitUntil: 'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2',
-    initialBrowserType: string
-  ): Promise<{ ok: true; manager: ChromeManager } | { ok: false; message: string }> {
-    let currentManager = manager;
-
-    try {
-      await currentManager.navigate({ url, waitUntil });
-    } catch (navError: any) {
-      const msg = (navError?.message || '').toLowerCase();
-      if ((msg.includes('timeout') || msg.includes('timed out')) && initialBrowserType === 'lightpanda' && CHROME_ENABLED) {
-        log.warn(sessionId, `Navigation timeout on Lightpanda, switching to headless Chrome`);
-        this.sessionManager.markPreferChrome(sessionId);
-        currentManager = await this.sessionManager.acquire(sessionId, true);
-        await currentManager.navigate({ url, waitUntil });
-      } else {
-        throw navError;
-      }
-    }
-
-    let check = this.sessionManager.getBrowserType(sessionId) === 'lightpanda'
-      ? await this.checkBotDetectionLightpanda(currentManager)
-      : await this.checkBotDetectionChrome(currentManager);
-
-    if (check.blocked) {
-      const currentType = this.sessionManager.getBrowserType(sessionId);
-      if (currentType === 'lightpanda' && CHROME_ENABLED) {
-        log.warn(sessionId, `Bot challenge on Lightpanda (${check.reason}), switching to headless Chrome`);
-        this.sessionManager.markPreferChrome(sessionId);
-        currentManager = await this.sessionManager.acquire(sessionId, true);
-        try {
-          await currentManager.navigate({ url, waitUntil });
-        } catch (e) {
-          throw e;
-        }
-        check = await this.checkBotDetectionChrome(currentManager);
-      }
-    }
-
-    if (check.blocked && check.certain && CHROME_ENABLED) {
-      const currentType = this.sessionManager.getBrowserType(sessionId);
-      if (currentType === 'chrome') {
-        try {
-          log.warn(sessionId, `Bot challenge on headless Chrome (${check.reason}), escalating to headful Chrome`);
-          this.sessionManager.markPreferHeadfulChrome(sessionId);
-          currentManager = await this.sessionManager.acquire(sessionId, false, true);
-          await currentManager.navigate({ url, waitUntil });
-          check = await this.checkBotDetectionChrome(currentManager);
-        } catch (e: any) {
-          const errMsg = e?.message || String(e);
-          log.error(sessionId, `Headful Chrome escalation failed: ${errMsg}`);
-          return {
-            ok: false,
-            message: `Bot challenge detected (${check.reason}). Fallback failed: ${errMsg}.`,
-          };
-        }
-      }
-    }
-
-    if (check.blocked && check.certain) {
-      return {
-        ok: false,
-        message: `Bot challenge detected (${check.reason}). Cannot render page.`,
-      };
-    }
-
-    if (check.blocked && !check.certain) {
-      log.warn(sessionId, `Bot detection check was uncertain (${check.reason}); proceeding without escalation`);
-    }
-
-    return { ok: true, manager: currentManager };
+  async shutdown(): Promise<void> {
+    this.stopCleanupJob();
+    for (const q of this.sessionQueues.values()) q.kill();
+    this.sessionQueues.clear();
+    await this.sessionManager.shutdown();
   }
 
   async run(): Promise<void> {

@@ -64,7 +64,7 @@ describe('MCP Tool Schema Tests', () => {
 
 describe('Browser Automation Flow Tests', () => {
   beforeAll(async () => {
-    await chromeManager.launch({ headless: true });
+    await chromeManager.launch();
   });
 
   afterAll(async () => {

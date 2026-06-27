@@ -8,17 +8,19 @@ describe('parseCliArgs', () => {
 
   it('parses all known flags', () => {
     const args = parseCliArgs([
-      '--chrome-enabled=false',
+      '--fallback-browser=headless',
       '--lightpanda-pool-size=10',
       '--navigate-wait-until=networkidle0',
+      '--skip-lightpanda-domains=g2.com,linkedin.com',
       '--user-agent=Mozilla/5.0',
       '--proxy-server=http://proxy.example.com:8080',
     ]);
 
     expect(args).toEqual({
-      'chrome-enabled': 'false',
+      'fallback-browser': 'headless',
       'lightpanda-pool-size': '10',
       'navigate-wait-until': 'networkidle0',
+      'skip-lightpanda-domains': 'g2.com,linkedin.com',
       'user-agent': 'Mozilla/5.0',
       'proxy-server': 'http://proxy.example.com:8080',
     });
@@ -32,7 +34,7 @@ describe('parseCliArgs', () => {
   });
 
   it('rejects invalid boolean values', () => {
-    expect(() => parseCliArgs(['--chrome-enabled=maybe'])).toThrow('Boolean flag');
+    expect(() => parseCliArgs(['--stealth-enabled=maybe'])).toThrow('Boolean flag');
   });
 
   it('rejects non-numeric values for numeric flags', () => {
@@ -45,14 +47,20 @@ describe('parseCliArgs', () => {
 
   it('rejects invalid enum values', () => {
     expect(() => parseCliArgs(['--navigate-wait-until=never'])).toThrow('Invalid value');
+    expect(() => parseCliArgs(['--fallback-browser=firefox'])).toThrow('Invalid value');
   });
 
   it('rejects unknown flags', () => {
     expect(() => parseCliArgs(['--unknown-flag=value'])).toThrow('Unknown flag');
   });
 
+  it('rejects removed flags', () => {
+    expect(() => parseCliArgs(['--chrome-enabled=false'])).toThrow('Unknown flag');
+    expect(() => parseCliArgs(['--skip-headless-domains=g2.com'])).toThrow('Unknown flag');
+  });
+
   it('rejects flags without =value', () => {
-    expect(() => parseCliArgs(['--chrome-enabled'])).toThrow('--flag=value');
+    expect(() => parseCliArgs(['--fallback-browser'])).toThrow('--flag=value');
   });
 
   it('rejects empty values', () => {
@@ -86,26 +94,26 @@ describe('applyCliArgsToEnv', () => {
 
   it('applies parsed CLI args to process.env', () => {
     applyCliArgsToEnv({
-      'chrome-enabled': 'false',
+      'fallback-browser': 'headless',
       'lightpanda-pool-size': '7',
       'navigate-wait-until': 'load',
     });
 
-    expect(process.env.CHROME_ENABLED).toBe('false');
+    expect(process.env.FALLBACK_BROWSER).toBe('headless');
     expect(process.env.LIGHTPANDA_POOL_SIZE).toBe('7');
     expect(process.env.NAVIGATE_WAIT_UNTIL).toBe('load');
   });
 
   it('overrides existing environment variables', () => {
-    process.env.CHROME_ENABLED = 'true';
+    process.env.FALLBACK_BROWSER = 'none';
     process.env.NAVIGATE_TIMEOUT = '30000';
 
     applyCliArgsToEnv({
-      'chrome-enabled': 'false',
+      'fallback-browser': 'browserbase',
       'navigate-timeout': '60000',
     });
 
-    expect(process.env.CHROME_ENABLED).toBe('false');
+    expect(process.env.FALLBACK_BROWSER).toBe('browserbase');
     expect(process.env.NAVIGATE_TIMEOUT).toBe('60000');
   });
 });

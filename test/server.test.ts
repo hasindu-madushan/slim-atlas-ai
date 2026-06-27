@@ -4,7 +4,7 @@ import { PuppeteerMCPServer } from '../src/server.js';
 
 describe('ChromeManager', () => {
   beforeAll(async () => {
-    await chromeManager.launch({ headless: true });
+    await chromeManager.launch();
   });
 
   afterAll(async () => {
@@ -131,7 +131,7 @@ describe('ChromeManager', () => {
     });
 
     it('should throw error when accessing page after close', async () => {
-      await chromeManager.launch({ headless: true });
+      await chromeManager.launch();
       await chromeManager.close();
       expect(() => chromeManager.getPage()).toThrow();
     });

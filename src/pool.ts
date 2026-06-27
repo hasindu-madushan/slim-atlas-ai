@@ -142,7 +142,7 @@ export class LightpandaPool {
     const lightpandaPath = path.join(__dirname, '..', 'lightpanda');
 
     if (!existsSync(lightpandaPath)) {
-      throw new Error(`Lightpanda binary not found at ${lightpandaPath}. Run browser_install first.`);
+      throw new Error(`Lightpanda binary not found at ${lightpandaPath}. It is auto-downloaded on first run; if missing, re-run to trigger the download.`);
     }
 
     await killPort(port);

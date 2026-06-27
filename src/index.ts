@@ -29,6 +29,18 @@ try {
 const { PuppeteerMCPServer } = await import('./server.js');
 const server = new PuppeteerMCPServer();
 
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { await server.shutdown(); } catch (e) {
+    console.error('Shutdown error:', e);
+  }
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
 server.run().catch((error) => {
   console.error('Failed to start server:', error);
   process.exit(1);

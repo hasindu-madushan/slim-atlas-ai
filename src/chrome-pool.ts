@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
+import type { FallbackPool } from './session.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -27,7 +28,7 @@ interface ChromeSlot {
   manager: ChromeManager;
 }
 
-export class ChromePool {
+export class ChromePool implements FallbackPool {
   private browser: Browser | null = null;
   private available: ChromeSlot[] = [];
   private inUse: Map<string, ChromeSlot> = new Map();

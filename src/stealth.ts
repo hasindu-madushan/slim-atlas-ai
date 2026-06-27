@@ -3,14 +3,9 @@ import type { Page } from 'puppeteer';
 const STEALTH_ENABLED = process.env.STEALTH_ENABLED !== 'false';
 const HUMAN_DELAYS_ENABLED = process.env.HUMAN_DELAYS_ENABLED !== 'false';
 
-const USER_AGENT_POOL = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-];
+// ponytail: removed the stale Chrome 124/125 UA pool — Reddit's "whoa there,
+// pardner" block flags spoofed/alternate UAs. By default we now send Chrome's
+// real UA. Set USER_AGENT to force an override for sites that need one.
 
 const VIEWPORT_POOL = [
   { width: 1920, height: 1080 },
@@ -22,7 +17,7 @@ const VIEWPORT_POOL = [
 ];
 
 export interface StealthConfig {
-  userAgent: string;
+  userAgent: string | null;
   viewport: { width: number; height: number };
   proxy: string | null;
   typingDelay: { min: number; max: number };
@@ -38,7 +33,7 @@ function getRandomInt(min: number, max: number): number {
 }
 
 export function getStealthConfig(): StealthConfig {
-  const userAgent = process.env.USER_AGENT || getRandomElement(USER_AGENT_POOL);
+  const userAgent = process.env.USER_AGENT || null;
   const viewport = getRandomElement(VIEWPORT_POOL);
   const proxy = process.env.PROXY_SERVER || null;
 
@@ -75,7 +70,9 @@ export async function applyStealthToPage(page: Page): Promise<void> {
 
   const config = getStealthConfig();
 
-  await page.setUserAgent(config.userAgent);
+  if (config.userAgent) {
+    await page.setUserAgent(config.userAgent);
+  }
   await page.setViewport(config.viewport);
 
   await page.evaluateOnNewDocument(() => {
@@ -120,7 +117,9 @@ export async function applyLightpandaStealth(page: Page): Promise<void> {
 
   const config = getStealthConfig();
 
-  await page.setUserAgent(config.userAgent);
+  if (config.userAgent) {
+    await page.setUserAgent(config.userAgent);
+  }
   await page.setViewport(config.viewport);
 
   await page.evaluateOnNewDocument(() => {

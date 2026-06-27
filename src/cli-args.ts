@@ -1,8 +1,15 @@
 export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'lightpanda-base-port': 'LIGHTPANDA_BASE_PORT',
   'lightpanda-pool-size': 'LIGHTPANDA_POOL_SIZE',
-  'chrome-enabled': 'CHROME_ENABLED',
+  'fallback-browser': 'FALLBACK_BROWSER',
   'chrome-pool-size': 'CHROME_POOL_SIZE',
+  'skip-lightpanda-domains': 'SKIP_LIGHTPANDA_DOMAINS',
+  'browserbase-api-key': 'BROWSERBASE_API_KEY',
+  'browserbase-project-id': 'BROWSERBASE_PROJECT_ID',
+  'browserbase-pool-size': 'BROWSERBASE_POOL_SIZE',
+  'browserbase-api-url': 'BROWSERBASE_API_URL',
+  'browserbase-connect-host': 'BROWSERBASE_CONNECT_HOST',
+  'max-sessions': 'MAX_SESSIONS',
   'stealth-enabled': 'STEALTH_ENABLED',
   'human-delays-enabled': 'HUMAN_DELAYS_ENABLED',
   'user-agent': 'USER_AGENT',
@@ -14,11 +21,9 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'navigate-timeout': 'NAVIGATE_TIMEOUT',
   'snapshot-flatten': 'SNAPSHOT_FLATTEN',
   'snapshot-text-trim-length': 'SNAPSHOT_TEXT_TRIM_LENGTH',
-  'skip-headless-domains': 'SKIP_HEADLESS_DOMAINS',
 };
 
 const BOOLEAN_FLAGS = new Set([
-  'chrome-enabled',
   'stealth-enabled',
   'human-delays-enabled',
   'resource-logging-enabled',
@@ -29,6 +34,8 @@ const NUMERIC_FLAGS = new Set([
   'lightpanda-base-port',
   'lightpanda-pool-size',
   'chrome-pool-size',
+  'browserbase-pool-size',
+  'max-sessions',
   'cleanup-interval-ms',
   'session-idle-timeout-ms',
   'navigate-timeout',
@@ -37,6 +44,7 @@ const NUMERIC_FLAGS = new Set([
 
 const ENUM_FLAGS: Record<string, string[]> = {
   'navigate-wait-until': ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
+  'fallback-browser': ['headless', 'headful', 'browserbase', 'none'],
 };
 
 function normalizeBoolean(value: string): string {

@@ -5,7 +5,7 @@
 <h1 align="center">SlimAtlas AI</h1>
 
 <p align="center">
-  A Model Context Protocol (MCP) server for extremely lightweight browser automation.
+  A Model Context Protocol (MCP) server for token-efficient browser automation, built for agents.
 </p>
 
 <p align="center">
@@ -24,9 +24,11 @@
 - **Node Inspection**: View specific nodes by ID to inspect text content or images
 - **History Navigation**: Go back, go forward, and reload pages
 - **Lightweight by Default**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
-- **Automatic Chrome Fallback**: If Lightpanda crashes or fails, automatically switches to Chrome for reliability
+- **Configurable Fallback Browser**: Two-level model — Lightpanda first, then escalate to **headless Chrome**, **headful Chrome**, or **Browserbase** cloud browsers when Lightpanda crashes, times out, or is bot-detected. Disable with `FALLBACK_BROWSER=none`.
+- **Per-Domain Routing**: List known-hard sites (`SKIP_LIGHTPANDA_DOMAINS`) that skip Lightpanda and start directly on the fallback browser.
+- **Robust Session Management**: Per-session serialization, optional session cap (`MAX_SESSIONS`), mid-session crash recovery with history replay, and graceful shutdown.
 - **Session Management**: Reuse sessions across multiple operations with unique session IDs
-- **Cross-Platform**: Works on macOS and Linux (Lightpanda), with automatic Chrome fallback when needed
+- **Cross-Platform**: Works on macOS and Linux (Lightpanda), with a configurable real-browser fallback when needed
 
 ## Installation
 
@@ -48,7 +50,7 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
 ```
 
-**Chrome Fallback**: If Lightpanda crashes or a page triggers bot detection, the server automatically switches to Chrome (via Puppeteer) for that session. Chrome/Chromium can be installed locally, or Puppeteer can download it automatically.
+**Fallback browser**: Level 1 is always Lightpanda. Level 2 is `FALLBACK_BROWSER` — one of `headless` (Chrome), `headful` (Chrome), `browserbase` (cloud), or `none` (default, no fallback). When Lightpanda crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome/Chromium can be installed locally or auto-downloaded by Puppeteer; Browserbase requires API credentials (see below).
 
 ## Usage
 
@@ -74,14 +76,25 @@ Add to your MCP client configuration:
 }
 ```
 
-**Tip**: Set `CHROME_ENABLED=false` to disable Chrome fallback and use Lightpanda only.
+**Tip**: Set `FALLBACK_BROWSER=none` to use Lightpanda only and propagate errors honestly. Use `headless`, `headful`, or `browserbase` to enable a real-browser fallback.
+
+### Fallback browser
+
+| `FALLBACK_BROWSER` | Level 2 browser | Notes |
+|---|---|---|
+| `none` (default) | — | Lightpanda only; errors propagate honestly |
+| `headless` | Headless Chrome | Sized by `CHROME_POOL_SIZE` |
+| `headful` | Headful Chrome | Real window on macOS; needs `xvfb` on headless Linux |
+| `browserbase` | Browserbase cloud | Requires `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` |
+
+**Skip Lightpanda for known-hard domains** with `SKIP_LIGHTPANDA_DOMAINS` (comma-separated, subdomain-aware). Matched hosts start directly on the fallback browser. Requires `FALLBACK_BROWSER != none` (otherwise the list is ignored with a warning).
 
 ### CLI Flags
 
-Every environment variable in `.env.example` can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables.
+Every environment variable in `.env.example` can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables. Unknown flags cause the server to exit at startup.
 
 ```bash
-npx tsx src/index.ts --chrome-enabled=false --lightpanda-pool-size=3 --navigate-timeout=60000
+npx tsx src/index.ts --fallback-browser=headless --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
 ```
 
 To use flags from an MCP client, append them to the `args` array:
@@ -94,8 +107,9 @@ To use flags from an MCP client, append them to the `args` array:
       "args": [
         "tsx",
         "path/to/mcp/src/index.ts",
-        "--chrome-enabled=false",
-        "--lightpanda-pool-size=3"
+        "--fallback-browser=headless",
+        "--skip-lightpanda-domains=g2.com,linkedin.com",
+        "--chrome-pool-size=3"
       ]
     }
   }

@@ -1,24 +1,47 @@
 import { LightpandaPool } from './pool.js';
 import { ChromePool } from './chrome-pool.js';
 import { HeadfulChromePool } from './headful-chrome-pool.js';
+import { BrowserbasePool } from './browserbase-pool.js';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { SessionHistory } from './history.js';
-import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
 
-const CHROME_ENABLED = process.env.CHROME_ENABLED !== 'false';
 const RESOURCE_LOGGING_ENABLED = process.env.RESOURCE_LOGGING_ENABLED !== 'false';
+const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '0', 10); // 0 = unlimited
 
-export type BrowserType = 'lightpanda' | 'chrome' | 'headful';
+export type FallbackType = 'none' | 'headless' | 'headful' | 'browserbase';
+
+export const FALLBACK_TYPE: FallbackType = (() => {
+  const v = (process.env.FALLBACK_BROWSER || 'none').toLowerCase();
+  return (v === 'headless' || v === 'headful' || v === 'browserbase' || v === 'none') ? v : 'none';
+})();
+
+export interface PoolSlot {
+  id: string;
+  manager: ChromeManager;
+}
+
+export interface FallbackPool {
+  acquire(sessionId: string): Promise<PoolSlot>;
+  release(sessionId: string): Promise<void>;
+  shutdown(): Promise<void>;
+  getStats(): Promise<PoolStats>;
+  killOrphaned(activeSlotIds: Set<string>): Promise<void>;
+  getMemoryUsageBytes(): Promise<number>;
+}
+
+export interface PoolStats {
+  total: number;
+  available: number;
+  inUse: number;
+  maxSize: number;
+  memoryBytes: number;
+}
 
 interface SessionState {
-  browserType: BrowserType;
-  preferChrome: boolean;
-  preferHeadful: boolean;
-  queue: Promise<void>;
+  onLightpanda: boolean;
   lpInstanceId?: string;
-  chromeSlotId?: string;
-  headfulChromeSlotId?: string;
+  fallbackSlotId?: string;
   manager: ChromeManager | null;
   lastActiveTime: number;
   history: SessionHistory;
@@ -26,135 +49,114 @@ interface SessionState {
 
 export class SessionManager {
   private sessions: Map<string, SessionState> = new Map();
-  private lpPool: LightpandaPool;
-  private chromePool: ChromePool;
-  private headfulChromePool: HeadfulChromePool;
+  private lpPool: LightpandaPool = new LightpandaPool();
+  private fallbackPoolInstance: FallbackPool | null = null;
 
-  constructor() {
-    this.lpPool = new LightpandaPool();
-    this.chromePool = new ChromePool();
-    this.headfulChromePool = new HeadfulChromePool();
+  getFallbackType(): FallbackType {
+    return FALLBACK_TYPE;
+  }
+
+  hasFallback(): boolean {
+    return FALLBACK_TYPE !== 'none';
+  }
+
+  private get fallbackPool(): FallbackPool {
+    if (!this.fallbackPoolInstance) {
+      this.fallbackPoolInstance = this.createFallbackPool();
+    }
+    return this.fallbackPoolInstance;
+  }
+
+  private createFallbackPool(): FallbackPool {
+    switch (FALLBACK_TYPE) {
+      case 'headless': return new ChromePool();
+      case 'headful': return new HeadfulChromePool();
+      case 'browserbase': return new BrowserbasePool();
+      default: throw new Error(`No fallback browser configured (FALLBACK_BROWSER=${FALLBACK_TYPE})`);
+    }
   }
 
   has(sessionId: string): boolean {
     return this.sessions.has(sessionId);
   }
 
-  async acquire(sessionId: string, preferChrome = false, preferHeadful = false): Promise<ChromeManager> {
-    let state = this.sessions.get(sessionId);
-
-    if (state && state.manager) {
-      if ((preferHeadful || state.preferHeadful) && state.browserType !== 'headful' && CHROME_ENABLED) {
-        log.info(sessionId, `Existing session, escalating to headful Chrome`);
-        await this.switchToHeadfulChrome(sessionId, state);
-      } else if ((preferChrome || state.preferChrome) && state.browserType === 'lightpanda' && CHROME_ENABLED) {
-        log.info(sessionId, `Existing session, switching from lightpanda to Chrome`);
-        await this.switchToChrome(sessionId, state);
-      }
-      return state.manager;
+  async acquire(sessionId: string): Promise<ChromeManager> {
+    if (this.sessions.has(sessionId)) {
+      return this.ensureConnected(sessionId);
     }
 
-    const initialHeadful = preferHeadful && CHROME_ENABLED;
-    const initialChrome = (preferChrome || initialHeadful) && CHROME_ENABLED;
-    state = {
-      browserType: initialHeadful ? 'headful' : (initialChrome ? 'chrome' : 'lightpanda'),
-      preferChrome: initialChrome,
-      preferHeadful: initialHeadful,
-      queue: Promise.resolve(),
+    if (MAX_SESSIONS > 0 && this.sessions.size >= MAX_SESSIONS) {
+      throw new Error(`Max sessions reached (${MAX_SESSIONS}). Close an existing session first.`);
+    }
+
+    const state: SessionState = {
+      onLightpanda: true,
       manager: null,
       lastActiveTime: Date.now(),
       history: new SessionHistory(),
     };
 
-    log.info(sessionId, `New session, browser=${state.browserType}`);
-
-    if (state.browserType === 'headful') {
-      try {
-        await this.attachHeadfulChrome(sessionId, state);
-      } catch (e: any) {
-        log.warn(sessionId, `Headful Chrome failed: ${e.message}, falling back to headless Chrome`);
-        state.preferHeadful = false;
-        state.browserType = 'chrome';
-        await this.attachChrome(sessionId, state);
-      }
-    } else if (state.browserType === 'chrome') {
-      await this.attachChrome(sessionId, state);
-    } else {
-      try {
-        await this.attachLightpanda(sessionId, state);
-      } catch (e: any) {
-        log.warn(sessionId, `Lightpanda failed: ${e.message}, falling back to Chrome`);
-        if (CHROME_ENABLED) {
-          state.preferChrome = true;
-          state.browserType = 'chrome';
-          if (state.lpInstanceId) {
-            await this.lpPool.release(sessionId);
-            state.lpInstanceId = undefined;
-          }
-          await this.attachChrome(sessionId, state);
-        } else {
-          throw e;
-        }
-      }
-    }
-
+    log.info(sessionId, `New session on lightpanda`);
+    await this.attachLightpanda(sessionId, state);
     this.sessions.set(sessionId, state);
     return state.manager!;
   }
 
+  // Level 2 switch: detach Lightpanda, attach the configured fallback, replay history.
+  async switchToFallback(sessionId: string): Promise<ChromeManager> {
+    if (!this.hasFallback()) {
+      throw new Error('No fallback browser configured (FALLBACK_BROWSER=none)');
+    }
+    const state = this.sessions.get(sessionId);
+    if (!state) throw new Error(`Session ${sessionId} not found`);
+
+    if (!state.onLightpanda) {
+      // Already on the fallback pool.
+      return this.ensureConnected(sessionId);
+    }
+
+    log.info(sessionId, `Switching lightpanda -> fallback (${FALLBACK_TYPE})`);
+    await this.detachLightpanda(sessionId, state);
+    await this.attachFallback(sessionId, state);
+    state.onLightpanda = false;
+
+    await state.history.replay(state.manager!, sessionId);
+    log.debug(sessionId, `Replayed history after switching to ${FALLBACK_TYPE}`);
+    return state.manager!;
+  }
+
+  // Re-acquire from the same layer if the underlying browser died mid-session.
+  async ensureConnected(sessionId: string): Promise<ChromeManager> {
+    const state = this.sessions.get(sessionId);
+    if (!state) throw new Error(`Session ${sessionId} not found`);
+    if (state.manager && state.manager.isConnected()) return state.manager;
+
+    log.warn(sessionId, `Manager disconnected, re-acquiring (${state.onLightpanda ? 'lightpanda' : FALLBACK_TYPE})`);
+    if (state.onLightpanda) {
+      await this.detachLightpanda(sessionId, state);
+      await this.attachLightpanda(sessionId, state);
+    } else {
+      await this.detachFallback(sessionId, state);
+      await this.attachFallback(sessionId, state);
+    }
+    await state.history.replay(state.manager!, sessionId);
+    return state.manager!;
+  }
+
+  isOnLightpanda(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.onLightpanda ?? true;
+  }
+
   private async attachLightpanda(sessionId: string, state: SessionState): Promise<void> {
-    const lpInstance = await this.lpPool.acquire(sessionId);
-    state.lpInstanceId = lpInstance.id;
-    state.manager = new ChromeManager({ browser: lpInstance.browser, context: lpInstance.context, page: lpInstance.page });
+    const inst = await this.lpPool.acquire(sessionId);
+    state.lpInstanceId = inst.id;
+    state.manager = new ChromeManager({ browser: inst.browser, context: inst.context, page: inst.page });
   }
 
-  private async attachChrome(sessionId: string, state: SessionState): Promise<void> {
-    const slot = await this.chromePool.acquire(sessionId);
-    state.chromeSlotId = slot.id;
+  private async attachFallback(sessionId: string, state: SessionState): Promise<void> {
+    const slot = await this.fallbackPool.acquire(sessionId);
+    state.fallbackSlotId = slot.id;
     state.manager = slot.manager;
-  }
-
-  private async attachHeadfulChrome(sessionId: string, state: SessionState): Promise<void> {
-    const slot = await this.headfulChromePool.acquire(sessionId);
-    state.headfulChromeSlotId = slot.id;
-    state.manager = slot.manager;
-  }
-
-  private async switchToChrome(sessionId: string, state: SessionState): Promise<void> {
-    log.info(sessionId, `Switching from lightpanda to Chrome`);
-    state.preferChrome = true;
-    state.browserType = 'chrome';
-
-    if (state.lpInstanceId) {
-      await this.detachLightpanda(sessionId, state);
-    }
-
-    await this.attachChrome(sessionId, state);
-
-    if (state.manager) {
-      await state.history.replay(state.manager, sessionId);
-      log.debug(sessionId, `Replayed history after switching to Chrome`);
-    }
-  }
-
-  private async switchToHeadfulChrome(sessionId: string, state: SessionState): Promise<void> {
-    log.info(sessionId, `Switching to headful Chrome`);
-    state.preferHeadful = true;
-    state.browserType = 'headful';
-
-    if (state.chromeSlotId) {
-      await this.detachChrome(sessionId, state);
-    }
-    if (state.lpInstanceId) {
-      await this.detachLightpanda(sessionId, state);
-    }
-
-    await this.attachHeadfulChrome(sessionId, state);
-
-    if (state.manager) {
-      await state.history.replay(state.manager, sessionId);
-      log.debug(sessionId, `Replayed history after switching to headful Chrome`);
-    }
   }
 
   private async detachLightpanda(sessionId: string, state: SessionState): Promise<void> {
@@ -168,25 +170,14 @@ export class SessionManager {
     }
   }
 
-  private async detachChrome(sessionId: string, state: SessionState): Promise<void> {
+  private async detachFallback(sessionId: string, state: SessionState): Promise<void> {
     if (state.manager) {
       try { await state.manager.close(); } catch (e) {}
       state.manager = null;
     }
-    if (state.chromeSlotId) {
-      await this.chromePool.release(sessionId);
-      state.chromeSlotId = undefined;
-    }
-  }
-
-  private async detachHeadfulChrome(sessionId: string, state: SessionState): Promise<void> {
-    if (state.manager) {
-      try { await state.manager.close(); } catch (e) {}
-      state.manager = null;
-    }
-    if (state.headfulChromeSlotId) {
-      await this.headfulChromePool.release(sessionId);
-      state.headfulChromeSlotId = undefined;
+    if (state.fallbackSlotId) {
+      await this.fallbackPool.release(sessionId);
+      state.fallbackSlotId = undefined;
     }
   }
 
@@ -195,43 +186,18 @@ export class SessionManager {
     if (!state) return;
 
     log.info(sessionId, `Releasing session`);
-
-    if (state.browserType === 'lightpanda' && state.lpInstanceId) {
-      await this.lpPool.release(sessionId);
-    } else if (state.browserType === 'headful' && state.headfulChromeSlotId) {
-      await this.headfulChromePool.release(sessionId);
-    } else if (state.browserType === 'chrome' && state.chromeSlotId) {
-      await this.chromePool.release(sessionId);
-    } else if (state.manager) {
-      // Fallback for any session not backed by a pool slot
-      try { await state.manager.close(); } catch (e) {}
+    if (state.onLightpanda) {
+      await this.detachLightpanda(sessionId, state);
+    } else {
+      await this.detachFallback(sessionId, state);
     }
-
     this.sessions.delete(sessionId);
   }
 
   async releaseAll(): Promise<void> {
-    for (const sessionId of this.sessions.keys()) {
+    for (const sessionId of [...this.sessions.keys()]) {
       await this.release(sessionId);
     }
-  }
-
-  markPreferChrome(sessionId: string): void {
-    const state = this.sessions.get(sessionId);
-    if (state) state.preferChrome = true;
-  }
-
-  markPreferHeadfulChrome(sessionId: string): void {
-    const state = this.sessions.get(sessionId);
-    if (state) state.preferHeadful = true;
-  }
-
-  shouldPreferChrome(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.preferChrome ?? false;
-  }
-
-  shouldPreferHeadfulChrome(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.preferHeadful ?? false;
   }
 
   touchSession(sessionId: string): void {
@@ -243,9 +209,7 @@ export class SessionManager {
     const now = Date.now();
     const idle: string[] = [];
     for (const [sessionId, state] of this.sessions) {
-      if (now - state.lastActiveTime > idleTimeoutMs) {
-        idle.push(sessionId);
-      }
+      if (now - state.lastActiveTime > idleTimeoutMs) idle.push(sessionId);
     }
     return idle;
   }
@@ -254,30 +218,27 @@ export class SessionManager {
     return new Set(this.sessions.keys());
   }
 
-  async purgeOrphanedInstances(activeSessionIds: Set<string>): Promise<void> {
-    const activeLpIds = new Set<string>();
-    for (const [sessionId, state] of this.sessions) {
-      if (activeSessionIds.has(sessionId) && state.lpInstanceId) {
-        activeLpIds.add(state.lpInstanceId);
-      }
+  private activeFallbackSlotIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const [, state] of this.sessions) {
+      if (!state.onLightpanda && state.fallbackSlotId) ids.add(state.fallbackSlotId);
     }
-    await this.lpPool.killOrphaned(activeLpIds);
+    return ids;
+  }
 
-    const activeChromeIds = new Set<string>();
-    for (const [sessionId, state] of this.sessions) {
-      if (activeSessionIds.has(sessionId) && state.chromeSlotId) {
-        activeChromeIds.add(state.chromeSlotId);
-      }
+  private activeLpInstanceIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const [, state] of this.sessions) {
+      if (state.onLightpanda && state.lpInstanceId) ids.add(state.lpInstanceId);
     }
-    await this.chromePool.killOrphaned(activeChromeIds);
+    return ids;
+  }
 
-    const activeHeadfulChromeIds = new Set<string>();
-    for (const [sessionId, state] of this.sessions) {
-      if (activeSessionIds.has(sessionId) && state.headfulChromeSlotId) {
-        activeHeadfulChromeIds.add(state.headfulChromeSlotId);
-      }
+  async purgeOrphanedInstances(_activeSessionIds: Set<string>): Promise<void> {
+    await this.lpPool.killOrphaned(this.activeLpInstanceIds());
+    if (this.fallbackPoolInstance) {
+      await this.fallbackPoolInstance.killOrphaned(this.activeFallbackSlotIds());
     }
-    await this.headfulChromePool.killOrphaned(activeHeadfulChromeIds);
   }
 
   getManager(sessionId: string): ChromeManager | null {
@@ -288,32 +249,28 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.history ?? null;
   }
 
-  getBrowserType(sessionId: string): BrowserType | null {
-    return this.sessions.get(sessionId)?.browserType ?? null;
-  }
-
   async shutdown(): Promise<void> {
     await this.releaseAll();
     await this.lpPool.shutdown();
-    await this.chromePool.shutdown();
-    await this.headfulChromePool.shutdown();
+    if (this.fallbackPoolInstance) {
+      await this.fallbackPoolInstance.shutdown();
+      this.fallbackPoolInstance = null;
+    }
   }
 
   async getStats() {
-    return {
-      sessions: this.sessions.size,
-      lightpanda: await this.lpPool.getStats(),
-      chrome: await this.chromePool.getStats(),
-      headful: await this.headfulChromePool.getStats(),
+    const lightpanda = await this.lpPool.getStats();
+    const fallback = this.fallbackPoolInstance ? await this.fallbackPoolInstance.getStats() : {
+      total: 0, available: 0, inUse: 0, maxSize: 0, memoryBytes: 0,
     };
+    return { sessions: this.sessions.size, lightpanda, fallback };
   }
 
   async logResourceUsage(): Promise<void> {
     if (!RESOURCE_LOGGING_ENABLED) return;
     const stats = await this.getStats();
     const lpMb = (stats.lightpanda.memoryBytes / 1024 / 1024).toFixed(1);
-    const chromeMb = (stats.chrome.memoryBytes / 1024 / 1024).toFixed(1);
-    const headfulMb = (stats.headful.memoryBytes / 1024 / 1024).toFixed(1);
-    log.info('resources', `Sessions: ${stats.sessions} | Lightpanda: ${stats.lightpanda.total} instances (${lpMb} MB) | Chrome: ${stats.chrome.total} instances (${chromeMb} MB) | Headful Chrome: ${stats.headful.total} instances (${headfulMb} MB)`);
+    const fbMb = (stats.fallback.memoryBytes / 1024 / 1024).toFixed(1);
+    log.info('resources', `Sessions: ${stats.sessions} (cap ${MAX_SESSIONS || '∞'}) | Lightpanda: ${stats.lightpanda.total} (${lpMb} MB) | Fallback [${FALLBACK_TYPE}]: ${stats.fallback.total} (${fbMb} MB)`);
   }
 }

@@ -6,6 +6,7 @@ import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
 import { ensureDisplay, type DisplayHandle } from './xvfb.js';
+import type { FallbackPool } from './session.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -28,7 +29,7 @@ interface HeadfulChromeSlot {
   manager: ChromeManager;
 }
 
-export class HeadfulChromePool {
+export class HeadfulChromePool implements FallbackPool {
   private browser: Browser | null = null;
   private available: HeadfulChromeSlot[] = [];
   private inUse: Map<string, HeadfulChromeSlot> = new Map();
