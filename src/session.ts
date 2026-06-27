@@ -1,7 +1,7 @@
 import { LightpandaPool } from './pool.js';
 import { ChromePool } from './chrome-pool.js';
 import { HeadfulChromePool } from './headful-chrome-pool.js';
-import { BrowserbasePool } from './browserbase-pool.js';
+import { createCloudService } from './cloud-browser-service.js';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { SessionHistory } from './history.js';
@@ -9,11 +9,11 @@ import { SessionHistory } from './history.js';
 const RESOURCE_LOGGING_ENABLED = process.env.RESOURCE_LOGGING_ENABLED !== 'false';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '0', 10); // 0 = unlimited
 
-export type FallbackType = 'none' | 'headless' | 'headful' | 'browserbase';
+export type FallbackType = 'none' | 'headless' | 'headful' | 'browserbase' | 'browserless';
 
 export const FALLBACK_TYPE: FallbackType = (() => {
   const v = (process.env.FALLBACK_BROWSER || 'none').toLowerCase();
-  return (v === 'headless' || v === 'headful' || v === 'browserbase' || v === 'none') ? v : 'none';
+  return (v === 'headless' || v === 'headful' || v === 'browserbase' || v === 'browserless' || v === 'none') ? v : 'none';
 })();
 
 export interface PoolSlot {
@@ -71,7 +71,8 @@ export class SessionManager {
     switch (FALLBACK_TYPE) {
       case 'headless': return new ChromePool();
       case 'headful': return new HeadfulChromePool();
-      case 'browserbase': return new BrowserbasePool();
+      case 'browserbase': return createCloudService('browserbase');
+      case 'browserless': return createCloudService('browserless');
       default: throw new Error(`No fallback browser configured (FALLBACK_BROWSER=${FALLBACK_TYPE})`);
     }
   }

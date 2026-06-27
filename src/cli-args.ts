@@ -6,9 +6,10 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'skip-lightpanda-domains': 'SKIP_LIGHTPANDA_DOMAINS',
   'browserbase-api-key': 'BROWSERBASE_API_KEY',
   'browserbase-project-id': 'BROWSERBASE_PROJECT_ID',
-  'browserbase-pool-size': 'BROWSERBASE_POOL_SIZE',
   'browserbase-api-url': 'BROWSERBASE_API_URL',
   'browserbase-connect-host': 'BROWSERBASE_CONNECT_HOST',
+  'browserless-token': 'BROWSERLESS_TOKEN',
+  'browserless-endpoint': 'BROWSERLESS_ENDPOINT',
   'max-sessions': 'MAX_SESSIONS',
   'stealth-enabled': 'STEALTH_ENABLED',
   'human-delays-enabled': 'HUMAN_DELAYS_ENABLED',
@@ -37,7 +38,6 @@ const NUMERIC_FLAGS = new Set([
   'lightpanda-base-port',
   'lightpanda-pool-size',
   'chrome-pool-size',
-  'browserbase-pool-size',
   'max-sessions',
   'cleanup-interval-ms',
   'session-idle-timeout-ms',
@@ -49,7 +49,7 @@ const NUMERIC_FLAGS = new Set([
 
 const ENUM_FLAGS: Record<string, string[]> = {
   'navigate-wait-until': ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
-  'fallback-browser': ['headless', 'headful', 'browserbase', 'none'],
+  'fallback-browser': ['headless', 'headful', 'browserbase', 'browserless', 'none'],
 };
 
 function normalizeBoolean(value: string): string {

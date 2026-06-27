@@ -21,11 +21,14 @@ No separate lint or typecheck scripts are defined; `npm run build` is the de-fac
 The server is a strict **2-level** model. Level 1 is always Lightpanda; level 2 is a single configurable fallback browser.
 
 - **Level 1 — Lightpanda (always, not configurable).** The binary lives at repo root as `lightpanda` and is auto-downloaded on first run if missing. It is gitignored. New sessions always start here. `PROXY_SERVER` is forwarded via its `--http-proxy` flag (see `buildLightpandaServeArgs` in `src/pool.ts`), so proxying applies to this layer too.
-- **Level 2 — `FALLBACK_BROWSER`.** One of `headless` | `headful` | `browserbase` | `none` (default `none`). Configured via env or `--fallback-browser`. Only the **one** configured pool is constructed, lazily (it spawns nothing until a session actually escalates).
+- **Level 2 — `FALLBACK_BROWSER`.** One of `headless` | `headful` | `browserbase` | `browserless` | `none` (default `none`). Configured via env or `--fallback-browser`. Only the **one** configured pool is constructed, lazily (it spawns nothing until a session actually escalates).
   - `headless` → `ChromePool` (headless Chrome via puppeteer-extra + stealth).
   - `headful` → `HeadfulChromePool`. On macOS it opens a real visible window (dev-only). On headless Linux without `DISPLAY` it lazily spawns `Xvfb` on a free display (`:99`, scanning up to `:103`) and tears it down at shutdown; if `Xvfb` is not installed (`apt-get install xvfb`) escalation fails with an honest `isError`.
-  - `browserbase` → `BrowserbasePool`. Cloud browsers via `puppeteer.connect` to Browserbase's WebSocket endpoint; each slot is a remote session created via REST (`POST /v1/sessions`) and deleted on release (`DELETE /v1/sessions/{id}`). No SDK dependency (uses the already-installed puppeteer + Node global `fetch`). Requires `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`.
+  - `browserbase` → `CloudBrowserService` (browserbase config). Cloud browsers via `puppeteer.connect`; each slot is a remote session created via REST (`POST /v1/sessions`) and deleted on release (`DELETE /v1/sessions/{id}`). Requires `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`.
+  - `browserless` → `CloudBrowserService` (browserless config). Cloud browsers via `puppeteer.connect` to `wss://production-sfo.browserless.io?token=…` (region-specific; override with `BROWSERLESS_ENDPOINT`); no REST lifecycle — the remote browser is torn down when the WebSocket closes. Requires `BROWSERLESS_TOKEN`.
   - `none` → no fallback. Lightpanda errors and bot challenges propagate honestly as `isError`.
+
+  Cloud providers (`browserbase`, `browserless`) share one engine, `src/cloud-browser-service.ts` (`CloudBrowserService`), parameterised by a `CloudConfig`. There is **no local pool** for cloud: each `acquire` opens a fresh remote connection and each `release` tears it down, so concurrency is bounded solely by `MAX_SESSIONS` (each session holds at most one fallback slot).
 
 **Escalation (level 1 → 2)** is triggered only at the Lightpanda layer, by:
 1. a navigation crash/timeout (`isCrashOrTimeout`), or
@@ -88,7 +91,8 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
   - `LIGHTPANDA_POOL_SIZE=5`, `CHROME_POOL_SIZE=1`, `HEADFUL_CHROME_POOL_SIZE` defaults to `CHROME_POOL_SIZE`
   - `CLEANUP_INTERVAL_MS=600000`, `SESSION_IDLE_TIMEOUT_MS=300000`
   - Rate limiting: `RATE_LIMIT_DOMAINS=` (empty), `RATE_LIMIT_MIN_DELAY_MS=0`, `RATE_LIMIT_JITTER_MS=0`
-  - Browserbase (only when `FALLBACK_BROWSER=browserbase`): `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSERBASE_POOL_SIZE`, `BROWSERBASE_API_URL=https://api.browserbase.com/v1`, `BROWSERBASE_CONNECT_HOST=wss://connect.browserbase.com`
+  - Browserbase (only when `FALLBACK_BROWSER=browserbase`): `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSERBASE_API_URL=https://api.browserbase.com/v1`, `BROWSERBASE_CONNECT_HOST=wss://connect.browserbase.com`
+  - Browserless (only when `FALLBACK_BROWSER=browserless`): `BROWSERLESS_TOKEN`, `BROWSERLESS_ENDPOINT=wss://production-sfo.browserless.io` (region-specific; sfo/lon/ams)
 
 ### Rate limiting (`src/rate-limit.ts`)
 
@@ -98,13 +102,14 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 
 - `CHROME_ENABLED` and the `--chrome-enabled` flag are **gone**. Use `FALLBACK_BROWSER` instead (`none` ≈ the old `CHROME_ENABLED=false`; `headless`/`headful` ≈ the old default).
 - `SKIP_HEADLESS_DOMAINS` / `--skip-headless-domains` is **renamed** to `SKIP_LIGHTPANDA_DOMAINS` / `--skip-lightpanda-domains`. A client still passing the old flag will get `Unknown flag: --skip-headless-domains` and the server will exit(1) at startup (stdio closes → MCP client sees "Connection closed").
+- `BROWSERBASE_POOL_SIZE` / `--browserbase-pool-size` is **gone**. Cloud providers (`browserbase`, `browserless`) are not pooled warm — each acquire opens a fresh remote connection and each release tears it down, so concurrency is bounded solely by `MAX_SESSIONS`. A client still passing the old flag will get `Unknown flag: --browserbase-pool-size` and the server will exit(1) at startup.
 
 ## TypeScript / module conventions
 
 - ESM only (`"type": "module"`). Imports in `src/` use `.js` extensions even for `.ts` files.
 - `tsconfig.json` has `noEmit: true` and includes `src` + `test`; `tsconfig.build.json` extends it, sets `noEmit: false`, `outDir: ./dist`, and includes only `src`.
 - `verbatimModuleSyntax: true` is enabled; use `import type` for type-only imports.
-- The three fallback pools (`ChromePool`, `HeadfulChromePool`, `BrowserbasePool`) all `implements FallbackPool` (interface in `src/session.ts`), so signature drift is caught at compile time.
+- The local fallback pools (`ChromePool`, `HeadfulChromePool`) and the shared cloud engine (`CloudBrowserService` in `src/cloud-browser-service.ts`) all `implements FallbackPool` (interface in `src/session.ts`), so signature drift is caught at compile time.
 
 ## Testing caveats
 
@@ -112,7 +117,7 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 - `test/integration.test.ts` spawns the server via `npx tsx src/index.ts` and exercises `ChromeManager` directly.
 - `test/server.test.ts` and `test/integration.test.ts` share the `chromeManager` singleton from `src/chrome.js`; browser lifecycle leaks across suites can cause flakiness if tests fail to close the browser.
 - `test/cli-args.test.ts` asserts the current CLI surface (including that removed flags `--chrome-enabled` / `--skip-headless-domains` are now rejected).
-- Browserbase has no automated test (needs real cloud credentials); validate manually with `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` set.
+- Browserbase/Browserless have no automated test (need real cloud credentials); validate manually with `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` or `BROWSERLESS_TOKEN` set.
 - Vitest has no custom config file; it uses defaults.
 
 ## Manual testing helpers

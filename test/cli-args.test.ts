@@ -58,6 +58,12 @@ describe('parseCliArgs', () => {
     expect(() => parseCliArgs(['--fallback-browser=firefox'])).toThrow('Invalid value');
   });
 
+  it('accepts every valid fallback-browser value', () => {
+    for (const v of ['headless', 'headful', 'browserbase', 'browserless', 'none']) {
+      expect(parseCliArgs([`--fallback-browser=${v}`])['fallback-browser']).toBe(v);
+    }
+  });
+
   it('rejects unknown flags', () => {
     expect(() => parseCliArgs(['--unknown-flag=value'])).toThrow('Unknown flag');
   });
