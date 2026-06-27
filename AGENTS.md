@@ -58,7 +58,7 @@ A standalone in-process service (`BotDetectionService`) imported by `src/server.
 Detection evaluates, in order:
 - **Strong structural markers** (block): HTML contains any of `cf-chl-bypass`, `cdn-cgi/challenge-platform`, `px-captcha`, `bm-challenge`, `/_bm/`, `datadome`.
 - **Challenge title prefix** (block): `document.title` matches `/^(just a moment|checking your browser|access denied|ddos protection|human verification|verify you are human|attention required)\b/i`.
-- **Near-empty body** (block): `bodyText.length < 50 && elementCount < 20`. This is strict on Lightpanda because Lightpanda runs no JavaScript, so a near-empty body strongly implies a JS-rendered page or challenge that needs a real browser.
+- **Near-empty body** (block): `bodyText.length < 50 && elementCount < 20`. Lightpanda *does* execute JavaScript, but its JS engine is incomplete relative to a full desktop browser, so pages that lean on advanced or unsupported APIs can render to a near-empty DOM. A near-empty body thus signals the page didn't render usefully and is worth retrying on the level-2 browser.
 - **Probe failure** (block): if the `page.evaluate` probe itself throws, returns `blocked: true` with `reason: "detection failed: …"` (mirrors the legacy "Lightpanda render failure → switch to a real browser" behaviour).
 
 The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker logic were removed — they were only relevant to the deleted middle/headful tiers.

@@ -19,6 +19,9 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'resource-logging-enabled': 'RESOURCE_LOGGING_ENABLED',
   'navigate-wait-until': 'NAVIGATE_WAIT_UNTIL',
   'navigate-timeout': 'NAVIGATE_TIMEOUT',
+  'rate-limit-domains': 'RATE_LIMIT_DOMAINS',
+  'rate-limit-min-delay-ms': 'RATE_LIMIT_MIN_DELAY_MS',
+  'rate-limit-jitter-ms': 'RATE_LIMIT_JITTER_MS',
   'snapshot-flatten': 'SNAPSHOT_FLATTEN',
   'snapshot-text-trim-length': 'SNAPSHOT_TEXT_TRIM_LENGTH',
 };
@@ -39,6 +42,8 @@ const NUMERIC_FLAGS = new Set([
   'cleanup-interval-ms',
   'session-idle-timeout-ms',
   'navigate-timeout',
+  'rate-limit-min-delay-ms',
+  'rate-limit-jitter-ms',
   'snapshot-text-trim-length',
 ]);
 

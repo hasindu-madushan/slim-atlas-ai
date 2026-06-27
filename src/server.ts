@@ -8,6 +8,7 @@ import fastq from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import { SessionManager } from './session.js';
 import { BotDetectionService } from './bot-detection.js';
+import { RateLimiter } from './rate-limit.js';
 import { log } from './logger.js';
 import type { ChromeManager } from './chrome.js';
 import type { PageInfo } from './types.js';
@@ -77,6 +78,7 @@ export class PuppeteerMCPServer {
   private server: Server;
   private sessionManager: SessionManager = new SessionManager();
   private botDetection: BotDetectionService = new BotDetectionService();
+  private rateLimiter: RateLimiter = new RateLimiter();
   private sessionQueues: Map<string, queueAsPromised<ToolTask>> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -89,6 +91,9 @@ export class PuppeteerMCPServer {
     this.startCleanupJob();
     if (SKIP_LIGHTPANDA_DOMAINS.length > 0 && !this.sessionManager.hasFallback()) {
       log.warn('server', `SKIP_LIGHTPANDA_DOMAINS set but FALLBACK_BROWSER=none — per-domain skipping is disabled`);
+    }
+    if (this.rateLimiter.isEnabled()) {
+      log.info('server', `Rate limiting enabled`);
     }
     log.info('server', `Initialized (fallback=${this.sessionManager.getFallbackType()}). Log file: ${log.getPath()}`);
   }
@@ -337,6 +342,8 @@ export class PuppeteerMCPServer {
       case 'browser_navigate': {
         const url = args.url;
         const waitUntil = args.waitUntil || DEFAULT_WAIT_UNTIL;
+
+        await this.rateLimiter.throttle(sessionId, url);
 
         if (this.sessionManager.isOnLightpanda(sessionId) && this.sessionManager.hasFallback() && shouldSkipLightpanda(url)) {
           log.info(sessionId, `Skip-lightpanda domain (${new URL(url).hostname}), starting on fallback (${this.sessionManager.getFallbackType()})`);

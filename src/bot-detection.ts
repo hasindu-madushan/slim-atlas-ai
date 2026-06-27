@@ -5,9 +5,10 @@ export interface BotDetectionResult {
   reason: string;
 }
 
-// ponytail: detection runs on the Lightpanda layer only (a no-JS browser), so a
-// near-empty body is itself a strong escalation signal. Weak markers and the
-// non-strict path were only relevant for the (now-removed) Chrome/CDP detection.
+// ponytail: detection runs on the Lightpanda layer only (a lightweight JS
+// engine, not a full desktop browser), so a near-empty body is itself a strong
+// escalation signal. Weak markers and the non-strict path were only relevant
+// for the (now-removed) Chrome/CDP detection.
 const STRONG_MARKERS = [
   'cf-chl-bypass', 'cdn-cgi/challenge-platform', 'px-captcha',
   'bm-challenge', '/_bm/', 'datadome',

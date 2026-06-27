@@ -12,6 +12,9 @@ describe('parseCliArgs', () => {
       '--lightpanda-pool-size=10',
       '--navigate-wait-until=networkidle0',
       '--skip-lightpanda-domains=g2.com,linkedin.com',
+      '--rate-limit-domains=g2.com,linkedin.com',
+      '--rate-limit-min-delay-ms=2000',
+      '--rate-limit-jitter-ms=1500',
       '--user-agent=Mozilla/5.0',
       '--proxy-server=http://proxy.example.com:8080',
     ]);
@@ -21,6 +24,9 @@ describe('parseCliArgs', () => {
       'lightpanda-pool-size': '10',
       'navigate-wait-until': 'networkidle0',
       'skip-lightpanda-domains': 'g2.com,linkedin.com',
+      'rate-limit-domains': 'g2.com,linkedin.com',
+      'rate-limit-min-delay-ms': '2000',
+      'rate-limit-jitter-ms': '1500',
       'user-agent': 'Mozilla/5.0',
       'proxy-server': 'http://proxy.example.com:8080',
     });
@@ -39,6 +45,8 @@ describe('parseCliArgs', () => {
 
   it('rejects non-numeric values for numeric flags', () => {
     expect(() => parseCliArgs(['--lightpanda-pool-size=abc'])).toThrow('non-negative integer');
+    expect(() => parseCliArgs(['--rate-limit-min-delay-ms=soon'])).toThrow('non-negative integer');
+    expect(() => parseCliArgs(['--rate-limit-jitter-ms=later'])).toThrow('non-negative integer');
   });
 
   it('rejects negative numeric values', () => {
