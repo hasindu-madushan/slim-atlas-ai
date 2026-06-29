@@ -1,9 +1,12 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import http from 'http';
+import { randomUUID } from 'crypto';
 import fastq from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import { SessionManager } from './session.js';
@@ -81,6 +84,8 @@ export class PuppeteerMCPServer {
   private rateLimiter: RateLimiter = new RateLimiter();
   private sessionQueues: Map<string, queueAsPromised<ToolTask>> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private httpServer: http.Server | null = null;
+  private httpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
 
   constructor() {
     this.server = new Server(
@@ -505,11 +510,111 @@ export class PuppeteerMCPServer {
     for (const q of this.sessionQueues.values()) q.kill();
     this.sessionQueues.clear();
     await this.sessionManager.shutdown();
+    if (this.httpServer) {
+      for (const t of this.httpTransports.values()) {
+        try { await t.close(); } catch { /* ponytail: best-effort on shutdown */ }
+      }
+      this.httpTransports.clear();
+      this.httpServer.close();
+      this.httpServer = null;
+    }
   }
 
   async run(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
+    const transport = (process.env.MCP_TRANSPORT ?? 'stdio').toLowerCase();
+    if (transport === 'http') {
+      await this.runHttp();
+      return;
+    }
+    const stdio = new StdioServerTransport();
+    await this.server.connect(stdio);
     log.info('server', 'MCP server connected via stdio transport');
+  }
+
+  private async runHttp(): Promise<void> {
+    const host = process.env.MCP_HOST ?? '127.0.0.1';
+    const port = parseInt(process.env.MCP_PORT ?? '3000', 10);
+    const authToken = process.env.MCP_AUTH_TOKEN;
+
+    this.httpServer = http.createServer(async (req, res) => {
+      try {
+        if (authToken) {
+          const sent = req.headers['authorization'] ?? '';
+          const expected = `Bearer ${authToken}`;
+          if (sent !== expected) {
+            res.writeHead(401, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'unauthorized' }));
+            return;
+          }
+        }
+
+        const url = new URL(req.url ?? '/', `http://${host}`);
+        if (url.pathname !== '/mcp') {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+
+        const sessionId = req.headers['mcp-session-id'] as string | undefined;
+        const existing = sessionId ? this.httpTransports.get(sessionId) : undefined;
+
+        if (req.method === 'DELETE') {
+          if (!existing || !sessionId) { res.writeHead(404); res.end(); return; }
+          await existing.close();
+          this.httpTransports.delete(sessionId);
+          log.info('server', `HTTP session ${sessionId} deleted`);
+          res.writeHead(204); res.end();
+          return;
+        }
+
+        let parsedBody: unknown;
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = [];
+          for await (const c of req) chunks.push(c as Buffer);
+          const raw = Buffer.concat(chunks).toString('utf8');
+          parsedBody = raw ? JSON.parse(raw) : undefined;
+        }
+
+        if (existing) {
+          await existing.handleRequest(req, res, parsedBody);
+          return;
+        }
+
+        if (req.method !== 'POST') {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'initialize via POST first' }));
+          return;
+        }
+
+        const newTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (id) => {
+            this.httpTransports.set(id, newTransport);
+            log.info('server', `HTTP session ${id} initialized`);
+          },
+          onsessionclosed: (id) => {
+            this.httpTransports.delete(id);
+            log.info('server', `HTTP session ${id} closed`);
+          },
+        });
+        newTransport.onerror = (err) => {
+          log.error('server', `HTTP transport error: ${err.message}`);
+        };
+        await this.server.connect(newTransport);
+        await newTransport.handleRequest(req, res, parsedBody);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error('server', `HTTP request failed: ${msg}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: msg }));
+        }
+      }
+    });
+
+    this.httpServer.listen(port, host, () => {
+      log.info('server', `MCP server listening on http://${host}:${port}/mcp`);
+      if (!authToken) log.warn('server', 'HTTP transport has no MCP_AUTH_TOKEN — open access');
+    });
   }
 }

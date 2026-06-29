@@ -5,7 +5,7 @@
 <h1 align="center">SlimAtlas AI</h1>
 
 <p align="center">
-  An extremely lightweight MCP server for token-efficient browser automation for AI agents, designed to run on servers.
+  An extremely lightweight standalone MCP server for token-efficient browser automation for AI agents, designed to run on servers.
 </p>
 
 <p align="center">
@@ -42,15 +42,99 @@ npm install
 
 Browser binary is downloaded automatically on first run.
 
-**Fallback browser**: Level 1 is always the lightweight browser. Level 2 is `FALLBACK_BROWSER` — one of `headful` (Chrome), `browserbase` (cloud), or `none` (default, no fallback). When the default crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome/Chromium can be installed locally or auto-downloaded; Browserbase requires API credentials (see below).
+**Fallback browser**: Level 1 is always the lightweight browser. Level 2 is `FALLBACK_BROWSER` — one of `headless` (headless Chrome), `headful` (headful Chrome), `browserbase` (cloud), `browserless` (cloud), or `none` (default, no fallback). When the default crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome is bundled by Puppeteer; Browserbase/Browserless require API credentials (see below).
 
 ## Usage
 
 ### Run the MCP Server
 
 ```bash
-# Run with npm
-npm run dev
+# Standalone HTTP server (default)
+npm run start -- --port=8080
+
+# Remote, authenticated
+MCP_AUTH_TOKEN=s3cret npm start -- --host=0.0.0.0 --port=8080
+```
+
+SlimAtlas exposes a single **Streamable HTTP** `/mcp` endpoint. Each client gets its own session via the `mcp-session-id` header; `MAX_SESSIONS` bounds concurrency. Point your MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "slimatlas": {
+      "url": "http://localhost:8080/mcp",
+      "transport": "http"
+    }
+  }
+}
+```
+
+With authentication:
+
+```json
+{
+  "mcpServers": {
+    "slimatlas": {
+      "url": "http://your-host:8080/mcp",
+      "transport": "http",
+      "headers": { "Authorization": "Bearer s3cret" }
+    }
+  }
+}
+```
+
+**Tip**: Use `--host=0.0.0.0` to expose remotely, but always set `MCP_AUTH_TOKEN` when doing so.
+
+### Docker
+
+The image bundles the Lightpanda binary at build time, so the container starts self-contained and never re-downloads:
+
+```bash
+docker build -t slimatlas .
+docker run -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas
+# -> http://localhost:8080/mcp
+```
+
+Pin a Lightpanda release for reproducible builds (any `lightpanda-io/browser` tag — default `nightly`):
+
+```bash
+docker build --build-arg LIGHTPANDA_VERSION=0.3.3 -t slimatlas:0.3.3 .
+```
+
+Multi-arch is handled automatically — the build detects the container's arch via `uname -m` (`x86_64` → `lightpanda-x86_64-linux`, `aarch64` → `lightpanda-aarch64-linux`), so the binary always matches the platform being built.
+
+> **Apple Silicon (M-series Macs):** pass `--platform linux/arm64` to build/run natively. Without it, Docker Desktop may default to `amd64` and run the container under Rosetta, which fails to launch the Lightpanda binary (`rosetta error: failed to open elf …`).
+> ```bash
+> docker build --platform linux/arm64 -t slimatlas .
+> docker run --platform linux/arm64 -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas
+> ```
+
+**Headful fallback variant.** The default image runs Lightpanda only (`FALLBACK_BROWSER=none`). To enable the headful Chrome fallback (needed only if you set `FALLBACK_BROWSER=headful` at runtime), build the headful variant — it adds the Chrome runtime libraries + Xvfb (~150MB) and presets `FALLBACK_BROWSER=headful`:
+
+```bash
+docker build --build-arg FALLBACK_BROWSER=headful -t slimatlas:headful .
+docker run -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas:headful
+```
+
+Xvfb is started lazily inside the container on the first session that escalates to headful Chrome — no entrypoint or manual `xvfb-run` needed.
+
+### Stdio Mode
+
+For MCP clients that spawn the server as a subprocess (local, single-client), use stdio transport:
+
+```bash
+npx tsx src/index.ts
+```
+
+```json
+{
+  "mcpServers": {
+    "slimatlas": {
+      "command": "npx",
+      "args": ["tsx", "path/to/mcp/src/index.ts"]
+    }
+  }
+}
 ```
 
 ### Configuration

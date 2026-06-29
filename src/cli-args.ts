@@ -25,6 +25,12 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'rate-limit-jitter-ms': 'RATE_LIMIT_JITTER_MS',
   'snapshot-flatten': 'SNAPSHOT_FLATTEN',
   'snapshot-text-trim-length': 'SNAPSHOT_TEXT_TRIM_LENGTH',
+  'transport': 'MCP_TRANSPORT',
+  'port': 'MCP_PORT',
+  'host': 'MCP_HOST',
+  'auth-token': 'MCP_AUTH_TOKEN',
+  'lightpanda-version': 'LIGHTPANDA_VERSION',
+  'log-to-stdout': 'LOG_TO_STDOUT',
 };
 
 const BOOLEAN_FLAGS = new Set([
@@ -32,6 +38,7 @@ const BOOLEAN_FLAGS = new Set([
   'human-delays-enabled',
   'resource-logging-enabled',
   'snapshot-flatten',
+  'log-to-stdout',
 ]);
 
 const NUMERIC_FLAGS = new Set([
@@ -45,11 +52,13 @@ const NUMERIC_FLAGS = new Set([
   'rate-limit-min-delay-ms',
   'rate-limit-jitter-ms',
   'snapshot-text-trim-length',
+  'port',
 ]);
 
 const ENUM_FLAGS: Record<string, string[]> = {
   'navigate-wait-until': ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
   'fallback-browser': ['headless', 'headful', 'browserbase', 'browserless', 'none'],
+  'transport': ['stdio', 'http'],
 };
 
 function normalizeBoolean(value: string): string {

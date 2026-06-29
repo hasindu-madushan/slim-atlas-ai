@@ -12,12 +12,33 @@ LIGHTPANDA_POOL_SIZE=3
 NAVIGATE_TIMEOUT=60000
 ```
 
+## Transport
+
+The server runs over **stdio** by default (for local MCP clients that spawn it as a subprocess). Set `MCP_TRANSPORT=http` to run as a standalone Streamable HTTP MCP server on a single `/mcp` endpoint (for remote / multi-client use).
+
+| Env Var | CLI Flag | Type | Default | Description |
+|---------|----------|------|---------|-------------|
+| `MCP_TRANSPORT` | `--transport` | enum | `stdio` | Transport mode. One of: `stdio`, `http`. |
+| `MCP_PORT` | `--port` | number | `3000` | HTTP listen port (only when `MCP_TRANSPORT=http`). |
+| `MCP_HOST` | `--host` | string | `127.0.0.1` | HTTP bind host (only when `MCP_TRANSPORT=http`). Use `0.0.0.0` to expose remotely — combine with `MCP_AUTH_TOKEN`. |
+| `MCP_AUTH_TOKEN` | `--auth-token` | string | (empty) | When set, HTTP requests must carry `Authorization: Bearer <token>`. Only enforced in `http` mode. Empty = open access (safe only behind loopback). |
+| `LOG_TO_STDOUT` | `--log-to-stdout` | boolean | (auto) | Mirror INFO/DEBUG logs to stdout. When unset, auto-enabled if `MCP_TRANSPORT=http` (so `docker logs` works); in stdio mode stdout stays clean for the JSON-RPC stream. Set explicitly to override the auto rule. |
+
+```bash
+# Local, open (loopback only)
+npx tsx src/index.ts --transport=http --port=8080
+
+# Remote, authenticated
+MCP_AUTH_TOKEN=s3cret npx tsx src/index.ts --transport=http --host=0.0.0.0 --port=8080
+```
+
 ## Browser (Core)
 
 | Env Var | CLI Flag | Type | Default | Description |
 |---------|----------|------|---------|-------------|
 | `LIGHTPANDA_BASE_PORT` | `--lightpanda-base-port` | number | `9222` | Base port for the lightweight browser instances. Each instance gets an incremented port. |
 | `LIGHTPANDA_POOL_SIZE` | `--lightpanda-pool-size` | number | `5` | Number of lightweight browser instances to keep in the pool. |
+| `LIGHTPANDA_VERSION` | `--lightpanda-version` | string | `nightly` | Release tag fetched if the binary is missing on startup. Any `lightpanda-io/browser` tag (`nightly`, `0.3.3`, …) works. The Docker image bakes the binary in at build time; override via `--build-arg LIGHTPANDA_VERSION=…`. |
 
 ## Fallback Browser
 

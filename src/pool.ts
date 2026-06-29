@@ -2,12 +2,57 @@ import { spawn, ChildProcess, exec } from 'child_process';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
+import { existsSync, writeFileSync, renameSync, chmodSync, unlinkSync } from 'fs';
 import { log } from './logger.js';
 import { applyLightpandaStealth } from './stealth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const LIGHTPANDA_PATH = path.join(__dirname, '..', 'lightpanda');
+
+// ponytail: platform→asset map. Asset naming is identical across nightly + stable tags,
+// so any LIGHTPANDA_VERSION resolves via the same URL shape. Add a new tuple here only
+// when lightpanda-io ships a new target.
+function lightpandaAsset(): string {
+  const { platform, arch } = process;
+  if (platform === 'darwin') {
+    if (arch === 'arm64') return 'lightpanda-aarch64-macos';
+    if (arch === 'x64') return 'lightpanda-x86_64-macos';
+  } else if (platform === 'linux') {
+    if (arch === 'arm64') return 'lightpanda-aarch64-linux';
+    if (arch === 'x64') return 'lightpanda-x86_64-linux';
+  }
+  throw new Error(`Unsupported platform for Lightpanda: ${platform}/${arch}. Set LIGHTPANDA_PATH or download manually.`);
+}
+
+// Fetches the binary into place if missing. Idempotent — no-op when the file already
+// exists (e.g. Docker baked it in, or a previous run succeeded). Buffers the ~60MB
+// asset in memory once at startup; fine for a server, avoids stream/edge runtime drift.
+export async function ensureLightpanda(): Promise<void> {
+  if (existsSync(LIGHTPANDA_PATH)) return;
+
+  const version = process.env.LIGHTPANDA_VERSION || 'nightly';
+  const asset = lightpandaAsset();
+  const url = `https://github.com/lightpanda-io/browser/releases/download/${version}/${asset}`;
+
+  log.info('pool', `Downloading Lightpanda ${version} from ${url}`);
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok) {
+    throw new Error(`Failed to download Lightpanda (${res.status} ${res.statusText}) from ${url}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const tmp = `${LIGHTPANDA_PATH}.tmp`;
+  try {
+    writeFileSync(tmp, buf);
+    chmodSync(tmp, 0o755);
+    renameSync(tmp, LIGHTPANDA_PATH); // atomic move → never leaves a corrupt half-binary
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* ponytail: best-effort cleanup */ }
+    throw err;
+  }
+  log.info('pool', `Lightpanda ${version} installed (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+}
 
 const BASE_PORT = parseInt(process.env.LIGHTPANDA_BASE_PORT || '9222', 10);
 const MAX_SIZE = parseInt(process.env.LIGHTPANDA_POOL_SIZE || '5', 10);
@@ -152,7 +197,7 @@ export class LightpandaPool {
     const lightpandaPath = path.join(__dirname, '..', 'lightpanda');
 
     if (!existsSync(lightpandaPath)) {
-      throw new Error(`Lightpanda binary not found at ${lightpandaPath}. It is auto-downloaded on first run; if missing, re-run to trigger the download.`);
+      await ensureLightpanda();
     }
 
     await killPort(port);

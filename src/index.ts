@@ -27,6 +27,9 @@ try {
 }
 
 const { PuppeteerMCPServer } = await import('./server.js');
+const { ensureLightpanda } = await import('./pool.js');
+
+await ensureLightpanda();
 const server = new PuppeteerMCPServer();
 
 let shuttingDown = false;
