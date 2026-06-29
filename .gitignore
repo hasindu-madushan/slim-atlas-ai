@@ -12,3 +12,5 @@ coverage/
 .cache/
 lightpanda
 logs/
+.opencode/
+.opencode/
