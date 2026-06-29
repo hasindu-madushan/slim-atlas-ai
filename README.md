@@ -5,11 +5,15 @@
 <h1 align="center">SlimAtlas AI</h1>
 
 <p align="center">
-  A Model Context Protocol (MCP) server for token-efficient browser automation, built for agents.
+  An extremely lightweight MCP server for token-efficient browser automation for AI agents, designed to run on servers.
 </p>
 
 <p align="center">
-  Works with <strong>macOS</strong> and <strong>Linux</strong>.
+  16x less memory. 9x faster execution. Up to 10x more token efficient than raw HTML.
+</p>
+
+<p align="center">
+  Works with <strong>Linux</strong> and <strong>macOS</strong>.
 </p>
 
 <p align="center">
@@ -19,18 +23,15 @@
 ## Features
 
 - **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
+- **Lightweight by Default**: 16x less memory than Chrome, 9x faster execution
 - **Page Snapshots**: Get compact YAML accessibility tree snapshots with unique node IDs for precise element targeting
 - **LLM-Optimized Context**: Snapshots are stripped to semantic essentials, keeping context usage tiny so you can fit more pages and longer sessions into the same window
-- **Node Inspection**: View specific nodes by ID to inspect text content or images
-- **History Navigation**: Go back, go forward, and reload pages
-- **Lightweight by Default**: Uses Lightpanda browser (9x less memory than Chrome, 11x faster)
-- **Configurable Fallback Browser**: Two-level model — Lightpanda first, then escalate to **headless Chrome**, **headful Chrome**, or **Browserbase** cloud browsers when Lightpanda crashes, times out, or is bot-detected. Disable with `FALLBACK_BROWSER=none`.
-- **Per-Domain Routing**: List known-hard sites (`SKIP_LIGHTPANDA_DOMAINS`) that skip Lightpanda and start directly on the fallback browser.
+- **Configurable Fallback Browser**: Two-level model — lightweight browser first, then escalate to **headful Chrome**, **Browserless** or **Browserbase** cloud browsers only when the default is bot-detected, crashes, or times out.
 - **Rate Limiting**: Stay under the radar. Enforce a configurable minimum delay between requests to specific domains with wildcard patterns (`*`, `*.reddit.com`) plus optional jitter, so your agent paces itself instead of hammering a site and tripping its bot defenses.
-- **Proxy Support**: Route every request through an HTTP proxy with a single `PROXY_SERVER` setting — applied automatically to **both** browser layers (Lightpanda and the Chrome fallback), so your real IP never touches the target. Supports inline basic auth (`http://user:pass@host:port`).
+- **Proxy Support**: Route every request through an HTTP proxy with a single `PROXY_SERVER` setting — applied automatically to **both** browser layers, so your real IP never touches the target. Supports inline basic auth (`http://user:pass@host:port`).
 - **Robust Session Management**: Per-session serialization, optional session cap (`MAX_SESSIONS`), mid-session crash recovery with history replay, and graceful shutdown.
 - **Session Management**: Reuse sessions across multiple operations with unique session IDs
-- **Cross-Platform**: Works on macOS and Linux (Lightpanda), with a configurable real-browser fallback when needed
+- **Cross-Platform**: Works on Linux and macOS, with a configurable real-browser fallback when needed
 
 ## Installation
 
@@ -39,20 +40,9 @@
 npm install
 ```
 
-Lightpanda binary will be downloaded automatically on first run. You can also manually download it:
+Browser binary is downloaded automatically on first run.
 
-```bash
-# Linux x86_64
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && chmod a+x ./lightpanda
-
-# macOS aarch64 (Apple Silicon)
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && chmod a+x ./lightpanda
-
-# macOS x86_64
-curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-macos && chmod a+x ./lightpanda
-```
-
-**Fallback browser**: Level 1 is always Lightpanda. Level 2 is `FALLBACK_BROWSER` — one of `headless` (Chrome), `headful` (Chrome), `browserbase` (cloud), or `none` (default, no fallback). When Lightpanda crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome/Chromium can be installed locally or auto-downloaded by Puppeteer; Browserbase requires API credentials (see below).
+**Fallback browser**: Level 1 is always the lightweight browser. Level 2 is `FALLBACK_BROWSER` — one of `headful` (Chrome), `browserbase` (cloud), or `none` (default, no fallback). When the default crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome/Chromium can be installed locally or auto-downloaded; Browserbase requires API credentials (see below).
 
 ## Usage
 
@@ -78,18 +68,19 @@ Add to your MCP client configuration:
 }
 ```
 
-**Tip**: Set `FALLBACK_BROWSER=none` to use Lightpanda only and propagate errors honestly. Use `headless`, `headful`, or `browserbase` to enable a real-browser fallback.
+**Tip**: Set `FALLBACK_BROWSER=none` to use the lightweight browser only and propagate errors honestly. Use `headful` or `browserbase` to enable a real-browser fallback.
+
+See [docs/configs.md](docs/configs.md) for all environment variables and CLI flags.
 
 ### Fallback browser
 
 | `FALLBACK_BROWSER` | Level 2 browser | Notes |
 |---|---|---|
-| `none` (default) | — | Lightpanda only; errors propagate honestly |
-| `headless` | Headless Chrome | Sized by `CHROME_POOL_SIZE` |
+| `none` (default) | — | Lightweight browser only; errors propagate honestly |
 | `headful` | Headful Chrome | Real window on macOS; needs `xvfb` on headless Linux |
 | `browserbase` | Browserbase cloud | Requires `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` |
 
-**Skip Lightpanda for known-hard domains** with `SKIP_LIGHTPANDA_DOMAINS` (comma-separated, subdomain-aware). Matched hosts start directly on the fallback browser. Requires `FALLBACK_BROWSER != none` (otherwise the list is ignored with a warning).
+**Skip the default browser for known-hard domains** with `SKIP_LIGHTPANDA_DOMAINS` (comma-separated, subdomain-aware). Matched hosts start directly on the fallback browser. Requires `FALLBACK_BROWSER != none` (otherwise the list is ignored with a warning).
 
 ### Rate limiting
 
@@ -117,7 +108,7 @@ RATE_LIMIT_JITTER_MS=1500
 
 Keep your real IP off the target. Set a single `PROXY_SERVER` and SlimAtlas routes **all** HTTP traffic from **both** browser layers through it — no per-browser wiring needed:
 
-- **Lightpanda (level 1)** — forwarded via its native `--http-proxy` flag.
+- **Lightweight browser (level 1)** — forwarded via its native `--http-proxy` flag.
 - **Chrome fallback (level 2)** — applied via `--proxy-server` at launch.
 
 ```bash
@@ -128,14 +119,14 @@ npx tsx src/index.ts --proxy-server=http://host:8080
 PROXY_SERVER=http://user:pass@host:8080
 ```
 
-Inline basic auth (`http://user:pass@host:port`) is supported on the Lightpanda layer. For IP-allowlisted proxies (no credentials) it just works on both layers. *(Per-page Chrome authentication via `page.authenticate` is on the roadmap.)*
+Inline basic auth (`http://user:pass@host:port`) is supported on the lightweight browser layer. For IP-allowlisted proxies (no credentials) it just works on both layers. *(Per-page Chrome authentication via `page.authenticate` is on the roadmap.)*
 
 ### CLI Flags
 
-Every environment variable in `.env.example` can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables. Unknown flags cause the server to exit at startup.
+Every environment variable can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables. Unknown flags cause the server to exit at startup. See [docs/configs.md](docs/configs.md) for the full list.
 
 ```bash
-npx tsx src/index.ts --fallback-browser=headless --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
+npx tsx src/index.ts --fallback-browser=headful --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
 ```
 
 To use flags from an MCP client, append them to the `args` array:
@@ -148,7 +139,7 @@ To use flags from an MCP client, append them to the `args` array:
       "args": [
         "tsx",
         "path/to/mcp/src/index.ts",
-        "--fallback-browser=headless",
+        "--fallback-browser=headful",
         "--skip-lightpanda-domains=g2.com,linkedin.com",
         "--chrome-pool-size=3"
       ]
@@ -164,7 +155,7 @@ To use flags from an MCP client, append them to the `args` array:
 
 # 1. Navigate to a URL (creates a new session automatically)
 result = mcp.call("browser_navigate", {"url": "https://example.com"})
-# Returns: session_id: abc1, result: [lightpanda] Navigated to https://example.com. Title: Example Domain
+# Returns: session_id: abc1, result: Navigated to https://example.com. Title: Example Domain
 
 # 2. Take a snapshot to see the page structure
 snapshot = mcp.call("browser_snapshot", {"session_id": "abc1"})
@@ -209,7 +200,7 @@ npx vitest
 ## Requirements
 
 - Node.js 18+
-- Lightpanda browser (macOS/Linux, downloads automatically) or Chrome/Chromium (fallback)
+- Linux or macOS (downloads automatically) or Chrome/Chromium (fallback)
 
 ## License
 
