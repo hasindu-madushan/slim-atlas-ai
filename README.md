@@ -42,7 +42,7 @@ npm install
 
 Browser binary is downloaded automatically on first run.
 
-**Fallback browser**: Level 1 is always the lightweight browser. Level 2 is `FALLBACK_BROWSER` — one of `headless` (headless Chrome), `headful` (headful Chrome), `browserbase` (cloud), `browserless` (cloud), or `none` (default, no fallback). When the default crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome is bundled by Puppeteer; Browserbase/Browserless require API credentials (see below).
+**Fallback browser**: Level 1 is always the lightweight browser. Level 2 is `FALLBACK_BROWSER` — one of `headful` (headful Chrome), `browserbase` (cloud), `browserless` (cloud), or `none` (default, no fallback). When the default crashes, times out, or is bot-detected, the session switches once to the configured fallback. Chrome is bundled by Puppeteer; Browserbase/Browserless require API credentials (see below).
 
 ## Usage
 
