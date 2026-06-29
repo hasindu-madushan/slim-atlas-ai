@@ -78,7 +78,8 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 ## Environment variables
 
 - Copy `.env.example` to `.env` for local tuning; the server reads vars at startup.
-- Every env var can also be set as a lower-case CLI flag in `--flag=value` form. CLI flags override env vars. Unknown flags throw at startup and the process exits(1). Example:
+- Every env var can also be set as a lower-case CLI flag in `--flag=value` form. CLI flags override env vars. Unknown flags throw at startup and the process exits(1).
+- **When adding a new env var or CLI flag, update `docs/configs.md`** — it is the single source of truth for all configuration options. Also update `src/cli-args.ts` (the flag-to-env mapping, type sets, and enum sets). Example:
   ```bash
   npx tsx src/index.ts --fallback-browser=headless --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
   ```
