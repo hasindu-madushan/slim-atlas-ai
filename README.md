@@ -20,6 +20,10 @@
   Built on top of <a href="https://pptr.dev/">Puppeteer</a> and <a href="https://github.com/lightpanda-io/browser">Lightpanda</a>.
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license MIT">
+</p>
+
 ## Features
 
 - **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
