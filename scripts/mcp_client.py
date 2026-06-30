@@ -19,9 +19,12 @@ import asyncio
 import os
 import re
 import sys
+import time
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_core.messages import ToolMessage
+from langchain_core.messages.utils import count_tokens_approximately
 
 
 # --- ANSI Colors ---
@@ -50,6 +53,12 @@ USE_COLOR = Color.supports_color()
 
 def c(color_code, text):
     return f"{color_code}{text}{Color.RESET}" if USE_COLOR else str(text)
+
+
+def fmt_time(seconds: float) -> str:
+    if seconds >= 1:
+        return f"({seconds:.2f}s)"
+    return f"({seconds * 1000:.0f}ms)"
 
 
 # --- Connection builders ---
@@ -229,23 +238,164 @@ async def prompt_for_args(tool, inline: str) -> dict | None:
     return args
 
 
+def _extract_text_from_blocks(blocks) -> str:
+    """Join text from a list of content blocks (dicts or strings)."""
+    parts = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+        elif isinstance(block, str):
+            parts.append(block)
+    return "\n".join(parts)
+
+
+def parse_result_text(result) -> str:
+    """Extract the plain text string from a langchain MCP tool result."""
+    if result is None:
+        return ""
+    # list of content blocks (direct return from StructuredTool.ainvoke)
+    if isinstance(result, list):
+        return _extract_text_from_blocks(result) or str(result)
+    # AIMessage or ToolMessage: content is list of blocks
+    if hasattr(result, "content"):
+        content = result.content
+        if isinstance(content, list):
+            text = _extract_text_from_blocks(content)
+            if text:
+                return text
+        if isinstance(content, str):
+            return content
+    return str(result)
+
+
+def format_snapshot(body: str) -> str:
+    """Render an accessibility tree as a colored tree with box-drawing chars."""
+    lines = []
+    for raw_line in body.split("\n"):
+        stripped = raw_line.lstrip()
+        if not stripped.startswith("- "):
+            # non-tree line (e.g. format explanation) — dim it
+            lines.append(c(Color.GRAY, f"  {raw_line}"))
+            continue
+
+        indent = (len(raw_line) - len(stripped)) // 2
+        node_text = stripped[2:]  # strip "- "
+
+        # build connector
+        if indent > 0:
+            connector = "│   " * (indent - 1) + "├── "
+        else:
+            connector = ""
+
+        # parse type, quoted text, #id
+        node_type = ""
+        display_text = ""
+        node_id = ""
+        rest = node_text
+
+        # extract type (first token)
+        parts = rest.split(None, 1)
+        if parts:
+            node_type = parts[0]
+            rest = parts[1] if len(parts) > 1 else ""
+
+        # extract quoted text
+        if rest.startswith('"'):
+            end_q = rest.find('"', 1)
+            if end_q != -1:
+                display_text = rest[1:end_q]
+                rest = rest[end_q + 1:].lstrip()
+            else:
+                display_text = rest[1:]
+                rest = ""
+
+        # extract #id
+        id_match = re.match(r"#(\d+)", rest)
+        if id_match:
+            node_id = id_match.group(1)
+
+        # color by type
+        if node_type.startswith("heading_"):
+            type_str = c(Color.BOLD + Color.WHITE, node_type)
+        elif node_type == "link":
+            type_str = c(Color.CYAN, node_type)
+        elif node_type == "button":
+            type_str = c(Color.YELLOW, node_type)
+        elif node_type in ("textbox", "combobox", "searchbox", "checkbox", "radio", "slider", "spinbutton", "option"):
+            type_str = c(Color.GREEN, node_type)
+        elif node_type == "image":
+            type_str = c(Color.DIM, node_type)
+        elif node_type in ("list", "table", "row", "cell", "columnheader", "listitem",
+                           "contentinfo", "banner", "navigation", "form", "group", "dialog", "label"):
+            type_str = c(Color.GRAY, node_type)
+        else:
+            type_str = c(Color.WHITE, node_type)
+
+        # build line parts
+        parts_out = [connector, type_str]
+        if display_text:
+            escaped = display_text.replace("\\", "\\\\").replace('"', '\\"')
+            # trim if very long
+            if len(escaped) > 120:
+                escaped = escaped[:117] + "..."
+            parts_out.append(f' "{c(Color.WHITE, escaped)}"')
+        if node_id:
+            parts_out.append(f" {c(Color.BOLD + Color.RED, f'#{node_id}')}")
+
+        lines.append("  " + "".join(parts_out))
+
+    return "\n".join(lines)
+
+
+def format_generic(body: str) -> str:
+    """Format a non-snapshot tool result."""
+    return c(Color.GREEN, body)
+
+
 async def invoke(tools, name: str, args: dict, session_id_holder: list):
     if name not in tools:
         print(c(Color.RED, f"  Unknown tool: {name}"))
         return
     print()
+    t0 = time.monotonic()
     try:
         result = await tools[name].ainvoke(args)
     except Exception as e:
-        print(c(Color.RED, f"  Error: {e}"))
+        elapsed = time.monotonic() - t0
+        print(c(Color.RED, f"  Error: {e} {c(Color.GRAY, fmt_time(elapsed))}"))
         return
-    text = str(result) if result is not None else ""
-    # capture session id from output
-    m = SESS_ID_RE.search(text)
+    elapsed = time.monotonic() - t0
+    raw = parse_result_text(result)
+
+    # extract session_id and body from server format: "session_id: X\nresult: Y"
+    session_id = ""
+    body = raw
+    m = re.match(r"session_id:\s*(\S+)\nresult:\s*", raw)
     if m:
-        session_id_holder[0] = m.group(2)
-    for line in text.split("\n"):
-        print(f"  {c(Color.GREEN, line)}")
+        session_id = m.group(1)
+        body = raw[m.end():]
+    else:
+        # fallback: old bracket format
+        m2 = SESS_ID_RE.search(raw)
+        if m2:
+            session_id = m2.group(2)
+
+    if session_id:
+        session_id_holder[0] = session_id
+        print(f"  {c(Color.GRAY, f'session: {session_id}')}")
+
+    # detect snapshot (accessibility tree lines start with "- type")
+    is_snapshot = any(line.lstrip().startswith("- ") and re.match(r"- \w", line.lstrip())
+                      for line in body.split("\n")[:5])
+
+    if is_snapshot:
+        print(format_snapshot(body))
+        tokens = count_tokens_approximately([ToolMessage(content=body, tool_call_id="snapshot")])
+        stats = f"{fmt_time(elapsed)} ~{tokens} tokens"
+    else:
+        print(format_generic(body))
+        stats = fmt_time(elapsed)
+    print(f"  {c(Color.GRAY, stats)}")
     print()
 
 
