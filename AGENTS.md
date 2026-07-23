@@ -123,8 +123,6 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 ## Manual testing helpers
 
 - `mcp_client.py` — interactive Python CLI that talks to the server over stdio.
-- `scripts/test-server.ts` — spawns the server and checks it starts without errors.
-- `scripts/test-mcp.ts` — end-to-end MCP handshake, tool list, navigate, snapshot, close. (Its session-id regex parses the raw JSON stream, so it misreads the id when the body contains `\n`; the server response format itself is correct.)
 
 ## Browser tools (from `src/server.ts`)
 
