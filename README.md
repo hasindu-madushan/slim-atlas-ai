@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  16x less memory. 9x faster execution. Up to 10x more token efficient than raw HTML.
+  ~5x less memory than Chromium. ~25x smaller snapshots than raw HTML.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
 ## Features
 
 - **Browser Automation**: Navigate, click, type, fill forms, and evaluate JavaScript
-- **Lightweight by Default**: 16x less memory than Chrome, 9x faster execution
+- **Lightweight by Default**: ~5x less memory than Chromium, ~25x smaller snapshots than raw HTML
 - **Page Snapshots**: Get compact YAML accessibility tree snapshots with unique node IDs for precise element targeting
 - **LLM-Optimized Context**: Snapshots are stripped to semantic essentials, keeping context usage tiny so you can fit more pages and longer sessions into the same window
 - **Configurable Fallback Browser**: Two-level model — lightweight browser first, then escalate to **headful Chrome**, **Browserless** or **Browserbase** cloud browsers only when the default is bot-detected, crashes, or times out.
@@ -38,6 +38,32 @@
 - **Robust Session Management**: Per-session serialization, optional session cap (`MAX_SESSIONS`), mid-session crash recovery with history replay, and graceful shutdown.
 - **Session Management**: Reuse sessions across multiple operations with unique session IDs
 - **Cross-Platform**: Works on Linux and macOS, with a configurable real-browser fallback when needed
+
+## Benchmark
+
+SlimAtlas was benchmarked against Playwright MCP (headless and headful Chromium) using [slim-atlas-bench](https://github.com/hasindu-madushan/slim-atlas-bench) — 25 real-world sites across 5 categories, 3 runs each (225 total), all running in Docker on localhost.
+
+**Setup**: Each service runs as an MCP server in its own Docker container. The benchmark harness measures per-tool-call latency (navigate + snapshot) via `langchain-mcp-adapters`, and captures container RAM via the Docker stats API. Snapshots are token-estimated at ~4 chars/token (same methodology as the raw HTML baseline).
+
+| Metric (median) | SlimAtlas | Playwright Headless | Playwright Headful |
+|---|---|---|---|
+| Navigate + Snapshot (ms) | 1,383 | 1,116 | 687 |
+| Container RAM (MB) | 124 | 635 | 815 |
+| Snapshot Tokens | 414 | 940 | 1,843 |
+
+SlimAtlas trades navigation speed for dramatically lower resource usage. Chromium is faster on page load, but uses **5–6x more RAM** and produces **2–4x more tokens** per snapshot — the two costs that dominate at scale in agent workflows.
+
+### Snapshot Tokens
+
+<p align="center">
+  <img src="img/bench-tokens.png" alt="Snapshot Tokens by Configuration" width="700">
+</p>
+
+### Memory Usage
+
+<p align="center">
+  <img src="img/bench-memory.png" alt="Memory Usage by Configuration" width="700">
+</p>
 
 ## Installation
 
