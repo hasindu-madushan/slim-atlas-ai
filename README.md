@@ -53,17 +53,14 @@ SlimAtlas was benchmarked against Playwright MCP (headless and headful Chromium)
 
 SlimAtlas trades navigation speed for dramatically lower resource usage. Chromium is faster on page load, but uses **5–6x more RAM** and produces **2–4x more tokens** per snapshot — the two costs that dominate at scale in agent workflows.
 
-### Snapshot Tokens
+### Results
 
-<p align="center">
-  <img src="img/bench-tokens.png" alt="Snapshot Tokens by Configuration" width="700">
-</p>
-
-### Memory Usage
-
-<p align="center">
-  <img src="img/bench-memory.png" alt="Memory Usage by Configuration" width="700">
-</p>
+<table>
+<tr>
+<td align="center"><strong>Snapshot Tokens</strong><br><img src="img/bench-tokens.png" alt="Snapshot Tokens" width="420"></td>
+<td align="center"><strong>Memory Usage</strong><br><img src="img/bench-memory.png" alt="Memory Usage" width="420"></td>
+</tr>
+</table>
 
 ## Installation
 
