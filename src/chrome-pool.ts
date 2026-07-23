@@ -1,7 +1,6 @@
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, BrowserContext, Page } from 'puppeteer';
-import { exec } from 'child_process';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
@@ -11,14 +10,10 @@ puppeteer.use(StealthPlugin());
 
 const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
 
-function getProcessMemoryBytes(pid: number): Promise<number> {
-  return new Promise((resolve) => {
-    exec(`ps -p ${pid} -o rss=`, (err, stdout) => {
-      if (err) return resolve(0);
-      const kb = parseInt(stdout.trim(), 10);
-      resolve(isNaN(kb) ? 0 : kb * 1024);
-    });
-  });
+async function getProcessMemoryBytes(pid: number): Promise<number> {
+  const result = await Bun.$`ps -p ${pid} -o rss=`.quiet().text().catch(() => '');
+  const kb = parseInt(result.trim(), 10);
+  return isNaN(kb) ? 0 : kb * 1024;
 }
 
 interface ChromeSlot {

@@ -3,18 +3,17 @@
 ## Project shape
 
 - Single-package TypeScript ESM MCP server (`slimatlas`). No monorepo.
-- Runtime entry: `src/index.ts`. Production build emits to `dist/` via `tsconfig.build.json`.
-- Uses `tsx` for dev execution; `node_modules` is present and `package-lock.json` is the lockfile.
+- Runtime entry: `src/index.ts`. Bun runs TypeScript natively — no build step required.
+- Uses `bun` for runtime, test runner, and package management; `bun.lock` is the lockfile.
 
 ## Commands
 
-- `npm run dev` — start the MCP server over stdio (uses `tsx src/index.ts`).
-- `npm run build` — compile `src/` to `dist/` with `tsc -p tsconfig.build.json`.
-- `npm start` — run the compiled `dist/index.js`.
-- `npm test` — run Vitest in watch mode.
-- `npm run test:run` — run Vitest once (use this in CI / verification).
+- `bun run src/index.ts` — start the MCP server over stdio.
+- `npm run build` — bundle to `dist/` with `bun build` (for environments that need a single-file output).
+- `bun test` — run Vitest once.
+- `npx tsc --noEmit` — typecheck all `src/` and `test/` files (uses `tsconfig.json`).
 
-No separate lint or typecheck scripts are defined; `npm run build` is the de-facto typecheck. `npx tsc --noEmit` also typechecks the `test/` files.
+No separate lint script is defined.
 
 ## Browser architecture — two levels
 
@@ -81,7 +80,7 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 - Every env var can also be set as a lower-case CLI flag in `--flag=value` form. CLI flags override env vars. Unknown flags throw at startup and the process exits(1).
 - **When adding a new env var or CLI flag, update `docs/configs.md`** — it is the single source of truth for all configuration options. Also update `src/cli-args.ts` (the flag-to-env mapping, type sets, and enum sets). Example:
   ```bash
-  npx tsx src/index.ts --fallback-browser=headless --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
+  bun run src/index.ts --fallback-browser=headless --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
   ```
 - Notable defaults:
   - `FALLBACK_BROWSER=none`
@@ -115,7 +114,7 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 ## Testing caveats
 
 - Tests hit real network hosts (`example.com`, `example.org`) and launch real browser instances; they require an internet connection.
-- `test/integration.test.ts` spawns the server via `npx tsx src/index.ts` and exercises `ChromeManager` directly.
+- `test/integration.test.ts` spawns the server via `bun run src/index.ts` and exercises `ChromeManager` directly.
 - `test/server.test.ts` and `test/integration.test.ts` share the `chromeManager` singleton from `src/chrome.js`; browser lifecycle leaks across suites can cause flakiness if tests fail to close the browser.
 - `test/cli-args.test.ts` asserts the current CLI surface (including that removed flags `--chrome-enabled` / `--skip-headless-domains` are now rejected).
 - Browserbase/Browserless have no automated test (need real cloud credentials); validate manually with `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` or `BROWSERLESS_TOKEN` set.

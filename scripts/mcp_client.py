@@ -6,7 +6,7 @@
 """Interactive CLI client for SlimAtlas MCP Server.
 
 Uses langchain-mcp-adapters (MultiServerMCPClient) to talk to the server.
-Default transport: stdio (spawns `npx tsx src/index.ts`). Use --http to connect
+Default transport: stdio (spawns `bun run src/index.ts`). Use --http to connect
 to a running standalone server instead.
 
 Run via:
@@ -68,8 +68,8 @@ def stdio_connection(repo_root: str) -> dict:
     return {
         "default": {
             "transport": "stdio",
-            "command": "npx",
-            "args": ["tsx", "src/index.ts"],
+            "command": "bun",
+            "args": ["run", "src/index.ts"],
             "cwd": repo_root,
         }
     }

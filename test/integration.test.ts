@@ -9,7 +9,7 @@ describe('MCP Integration Tests', () => {
   });
 
   beforeAll(async () => {
-    serverProcess = spawn('npx', ['tsx', 'src/index.ts'], {
+    serverProcess = spawn('bun', ['run', 'src/index.ts'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });

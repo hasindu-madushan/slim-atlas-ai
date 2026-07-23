@@ -1,4 +1,3 @@
-import { spawn, exec, type ChildProcess } from 'child_process';
 import { log } from './logger.js';
 
 export interface DisplayHandle {
@@ -8,24 +7,23 @@ export interface DisplayHandle {
 
 const NOOP_HANDLE: DisplayHandle = { kill: () => {}, display: process.env.DISPLAY || ':0' };
 
-function probeXvfb(): Promise<boolean> {
-  return new Promise((resolve) => {
-    exec('command -v Xvfb', (err) => resolve(!err));
-  });
+async function probeXvfb(): Promise<boolean> {
+  try {
+    // ponytail: `which`, not `command -v` — Bun's shell has no `command` builtin.
+    const { exitCode } = await Bun.$`which Xvfb`.quiet();
+    return exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
-function tryStartXvfb(display: string): Promise<ChildProcess> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('Xvfb', [display, '-screen', '0', '1920x1080x24'], { stdio: 'ignore' });
-    const timer = setTimeout(() => {
-      proc.removeAllListeners('exit');
-      resolve(proc);
-    }, 500);
-    proc.once('exit', (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Xvfb on ${display} exited immediately (code ${code}); display may be in use`));
-    });
-  });
+async function tryStartXvfb(display: string): Promise<any> {
+  const proc = Bun.spawn(['Xvfb', display, '-screen', '0', '1920x1080x24'], { stdio: ['ignore', 'ignore', 'ignore'] });
+  await Bun.sleep(500);
+  if (proc.killed || proc.exitCode !== null) {
+    throw new Error(`Xvfb on ${display} exited immediately; display may be in use`);
+  }
+  return proc;
 }
 
 export async function ensureDisplay(): Promise<DisplayHandle> {

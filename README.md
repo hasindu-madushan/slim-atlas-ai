@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  Built on top of <a href="https://pptr.dev/">Puppeteer</a> and <a href="https://github.com/lightpanda-io/browser">Lightpanda</a>.
+  Built on <a href="https://bun.sh/">Bun</a>, <a href="https://pptr.dev/">Puppeteer</a> and <a href="https://github.com/lightpanda-io/browser">Lightpanda</a>.
 </p>
 
 <p align="center">
@@ -39,9 +39,11 @@
 
 ## Installation
 
+Requires [Bun](https://bun.sh/) ≥1.1.
+
 ```bash
 # Install dependencies
-npm install
+bun install
 ```
 
 Browser binary is downloaded automatically on first run.
@@ -54,10 +56,10 @@ Browser binary is downloaded automatically on first run.
 
 ```bash
 # Standalone HTTP server (default)
-npm run start -- --port=8080
+bun run src/index.ts --port=8080
 
 # Remote, authenticated
-MCP_AUTH_TOKEN=s3cret npm start -- --host=0.0.0.0 --port=8080
+MCP_AUTH_TOKEN=s3cret bun run src/index.ts --host=0.0.0.0 --port=8080
 ```
 
 SlimAtlas exposes a single **Streamable HTTP** `/mcp` endpoint. Each client gets its own session via the `mcp-session-id` header; `MAX_SESSIONS` bounds concurrency. Point your MCP client at it:
@@ -109,14 +111,14 @@ Multi-arch is handled automatically — the build detects the container's arch v
 
 > **Apple Silicon (M-series Macs):** pass `--platform linux/arm64` to build/run natively. Without it, Docker Desktop may default to `amd64` and run the container under Rosetta, which fails to launch the Lightpanda binary (`rosetta error: failed to open elf …`).
 > ```bash
-> docker build --platform linux/arm64 -t slimatlas .
+> docker build --platform linux/arm64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
 > docker run --platform linux/arm64 -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas
 > ```
 
 **Headful fallback variant.** The default image runs Lightpanda only (`FALLBACK_BROWSER=none`). To enable the headful Chrome fallback (needed only if you set `FALLBACK_BROWSER=headful` at runtime), build the headful variant — it adds the Chrome runtime libraries + Xvfb (~150MB) and presets `FALLBACK_BROWSER=headful`:
 
 ```bash
-docker build --build-arg FALLBACK_BROWSER=headful -t slimatlas:headful .
+docker build --build-arg LIGHTPANDA_VERSION=0.3.3 FALLBACK_BROWSER=headful -t slimatlas:headful .
 docker run -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas:headful
 ```
 
@@ -127,15 +129,15 @@ Xvfb is started lazily inside the container on the first session that escalates 
 For MCP clients that spawn the server as a subprocess (local, single-client), use stdio transport:
 
 ```bash
-npx tsx src/index.ts
+bun run src/index.ts
 ```
 
 ```json
 {
   "mcpServers": {
     "slimatlas": {
-      "command": "npx",
-      "args": ["tsx", "path/to/mcp/src/index.ts"]
+      "command": "bun",
+      "args": ["run", "path/to/mcp/src/index.ts"]
     }
   }
 }
@@ -149,8 +151,8 @@ Add to your MCP client configuration:
 {
   "mcpServers": {
     "slimatlas": {
-      "command": "npx",
-      "args": ["tsx", "path/to/mcp/src/index.ts"]
+      "command": "bun",
+      "args": ["run", "path/to/mcp/src/index.ts"]
     }
   }
 }
@@ -184,7 +186,7 @@ Disabled by default. Enable with a non-empty domain list **and** a non-zero dela
 
 ```bash
 # Via CLI flags
-npx tsx src/index.ts --rate-limit-domains=*.reddit.com,g2.com --rate-limit-min-delay-ms=2000 --rate-limit-jitter-ms=1500
+bun run src/index.ts --rate-limit-domains=*.reddit.com,g2.com --rate-limit-min-delay-ms=2000 --rate-limit-jitter-ms=1500
 
 # Or via environment / .env
 RATE_LIMIT_DOMAINS=*.reddit.com,g2.com
@@ -201,7 +203,7 @@ Keep your real IP off the target. Set a single `PROXY_SERVER` and SlimAtlas rout
 
 ```bash
 # Via CLI flag
-npx tsx src/index.ts --proxy-server=http://host:8080
+bun run src/index.ts --proxy-server=http://host:8080
 
 # Or via environment / .env
 PROXY_SERVER=http://user:pass@host:8080
@@ -214,7 +216,7 @@ Inline basic auth (`http://user:pass@host:port`) is supported on the lightweight
 Every environment variable can also be passed as a lower-case CLI flag in `--flag=value` form. CLI flags override environment variables. Unknown flags cause the server to exit at startup. See [docs/configs.md](docs/configs.md) for the full list.
 
 ```bash
-npx tsx src/index.ts --fallback-browser=headful --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
+bun run src/index.ts --fallback-browser=headful --lightpanda-pool-size=3 --skip-lightpanda-domains=g2.com --navigate-timeout=60000
 ```
 
 To use flags from an MCP client, append them to the `args` array:
@@ -223,9 +225,9 @@ To use flags from an MCP client, append them to the `args` array:
 {
   "mcpServers": {
     "slimatlas": {
-      "command": "npx",
+      "command": "bun",
       "args": [
-        "tsx",
+        "run",
         "path/to/mcp/src/index.ts",
         "--fallback-browser=headful",
         "--skip-lightpanda-domains=g2.com,linkedin.com",
@@ -279,15 +281,15 @@ mcp.call("browser_close", {"session_id": "abc1"})
 
 ```bash
 # Run all tests
-npm test
+bun test
 
 # Run tests in watch mode
-npx vitest
+bun test --watch
 ```
 
 ## Requirements
 
-- Node.js 18+
+- [Bun](https://bun.sh/) ≥1.1
 - Linux or macOS (downloads automatically) or Chrome/Chromium (fallback)
 
 ## License

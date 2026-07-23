@@ -1,4 +1,3 @@
-import { spawn, ChildProcess, exec } from 'child_process';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,9 +10,6 @@ const __dirname = path.dirname(__filename);
 
 const LIGHTPANDA_PATH = path.join(__dirname, '..', 'lightpanda');
 
-// ponytail: platform→asset map. Asset naming is identical across nightly + stable tags,
-// so any LIGHTPANDA_VERSION resolves via the same URL shape. Add a new tuple here only
-// when lightpanda-io ships a new target.
 function lightpandaAsset(): string {
   const { platform, arch } = process;
   if (platform === 'darwin') {
@@ -26,9 +22,6 @@ function lightpandaAsset(): string {
   throw new Error(`Unsupported platform for Lightpanda: ${platform}/${arch}. Set LIGHTPANDA_PATH or download manually.`);
 }
 
-// Fetches the binary into place if missing. Idempotent — no-op when the file already
-// exists (e.g. Docker baked it in, or a previous run succeeded). Buffers the ~60MB
-// asset in memory once at startup; fine for a server, avoids stream/edge runtime drift.
 export async function ensureLightpanda(): Promise<void> {
   if (existsSync(LIGHTPANDA_PATH)) return;
 
@@ -41,23 +34,22 @@ export async function ensureLightpanda(): Promise<void> {
   if (!res.ok) {
     throw new Error(`Failed to download Lightpanda (${res.status} ${res.statusText}) from ${url}`);
   }
-  const buf = Buffer.from(await res.arrayBuffer());
   const tmp = `${LIGHTPANDA_PATH}.tmp`;
   try {
-    writeFileSync(tmp, buf);
+    await Bun.write(tmp, res);
     chmodSync(tmp, 0o755);
-    renameSync(tmp, LIGHTPANDA_PATH); // atomic move → never leaves a corrupt half-binary
+    renameSync(tmp, LIGHTPANDA_PATH);
   } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ponytail: best-effort cleanup */ }
+    try { unlinkSync(tmp); } catch { }
     throw err;
   }
-  log.info('pool', `Lightpanda ${version} installed (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+  const stat = existsSync(LIGHTPANDA_PATH) ? 0 : 0;
+  log.info('pool', `Lightpanda ${version} installed`);
 }
 
 const BASE_PORT = parseInt(process.env.LIGHTPANDA_BASE_PORT || '9222', 10);
 const MAX_SIZE = parseInt(process.env.LIGHTPANDA_POOL_SIZE || '5', 10);
 
-// ponytail: pure builder so spawn args are unit-testable without launching the binary.
 export function buildLightpandaServeArgs(port: number, proxy?: string): string[] {
   const args = [
     'serve', '--log_level', 'warn',
@@ -70,35 +62,30 @@ export function buildLightpandaServeArgs(port: number, proxy?: string): string[]
 interface LightpandaInstance {
   id: string;
   port: number;
-  process: ChildProcess;
+  process: any;
   browser: any;
   context: any;
   page: any;
   ready: boolean;
 }
 
-function killPort(port: number): Promise<void> {
-  return new Promise((resolve) => {
-    exec(`lsof -i :${port} -t | xargs kill -9 2>/dev/null`, () => resolve());
-  });
+async function killPort(port: number): Promise<void> {
+  const result = await Bun.$`lsof -i :${port} -t`.quiet().text().catch(() => '');
+  const pids = result.trim().split('\n').filter(Boolean);
+  for (const pid of pids) {
+    try { process.kill(parseInt(pid, 10), 'SIGKILL'); } catch {}
+  }
 }
 
-function isPortInUse(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    exec(`lsof -i :${port} -t`, (err, stdout) => {
-      resolve(!!stdout && stdout.trim().length > 0);
-    });
-  });
+async function isPortInUse(port: number): Promise<boolean> {
+  const result = await Bun.$`lsof -i :${port} -t`.quiet().text().catch(() => '');
+  return result.trim().length > 0;
 }
 
-function getProcessMemoryBytes(pid: number): Promise<number> {
-  return new Promise((resolve) => {
-    exec(`ps -p ${pid} -o rss=`, (err, stdout) => {
-      if (err) return resolve(0);
-      const kb = parseInt(stdout.trim(), 10);
-      resolve(isNaN(kb) ? 0 : kb * 1024);
-    });
-  });
+async function getProcessMemoryBytes(pid: number): Promise<number> {
+  const result = await Bun.$`ps -p ${pid} -o rss=`.quiet().text().catch(() => '');
+  const kb = parseInt(result.trim(), 10);
+  return isNaN(kb) ? 0 : kb * 1024;
 }
 
 export class LightpandaPool {
@@ -201,19 +188,18 @@ export class LightpandaPool {
     }
 
     await killPort(port);
-    await new Promise((r) => setTimeout(r, 200));
+    await Bun.sleep(200);
 
     log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
-    const proc = spawn(lightpandaPath, buildLightpandaServeArgs(port, process.env.PROXY_SERVER), { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = Bun.spawn([lightpandaPath, ...buildLightpandaServeArgs(port, process.env.PROXY_SERVER)], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    proc.on('error', (err) => log.error('pool', `${id} error: ${err.message}`));
-    proc.on('exit', (code) => {
+    proc.exited.then((code) => {
       log.warn('pool', `${id} exited with code ${code}`);
       const inst = this.instances.find(i => i.id === id);
       if (inst) inst.ready = false;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await Bun.sleep(1000);
 
     const wsEndpoint = `ws://127.0.0.1:${port}`;
     let browser: any = null;
@@ -223,7 +209,7 @@ export class LightpandaPool {
         log.info('pool', `${id} connected`);
         break;
       } catch (e) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await Bun.sleep(200);
       }
     }
 

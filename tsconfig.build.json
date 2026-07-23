@@ -6,3 +6,4 @@
   },
   "include": ["src/**/*"]
 }
+// ponytail: kept for `tsc --noEmit` typechecks. Actual build uses `bun build src/index.ts --outdir dist --target bun --format esm`.
