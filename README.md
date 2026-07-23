@@ -91,7 +91,7 @@ With authentication:
 }
 ```
 
-**Tip**: Use `--host=0.0.0.0` to expose remotely, but always set `MCP_AUTH_TOKEN` when doing so.
+**Tip**: Use `--host=0.0.0.0` to expose remotely, but always set `MCP_AUTH_TOKEN` when doing so. The server speaks plain HTTP only — terminate TLS in front (Caddy/nginx) or the Bearer token travels the network in cleartext.
 
 ### Docker
 

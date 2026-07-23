@@ -20,7 +20,7 @@ The server runs over **stdio** by default (for local MCP clients that spawn it a
 |---------|----------|------|---------|-------------|
 | `MCP_TRANSPORT` | `--transport` | enum | `stdio` | Transport mode. One of: `stdio`, `http`. |
 | `MCP_PORT` | `--port` | number | `3000` | HTTP listen port (only when `MCP_TRANSPORT=http`). |
-| `MCP_HOST` | `--host` | string | `127.0.0.1` | HTTP bind host (only when `MCP_TRANSPORT=http`). Use `0.0.0.0` to expose remotely — combine with `MCP_AUTH_TOKEN`. |
+| `MCP_HOST` | `--host` | string | `127.0.0.1` | HTTP bind host (only when `MCP_TRANSPORT=http`). Use `0.0.0.0` to expose remotely — combine with `MCP_AUTH_TOKEN`, and terminate TLS in front (Caddy/nginx): the server speaks plain HTTP only, so the token is otherwise sent in cleartext. |
 | `MCP_AUTH_TOKEN` | `--auth-token` | string | (empty) | When set, HTTP requests must carry `Authorization: Bearer <token>`. Only enforced in `http` mode. Empty = open access (safe only behind loopback). |
 | `LOG_TO_STDOUT` | `--log-to-stdout` | boolean | (auto) | Mirror INFO/DEBUG logs to stdout. When unset, auto-enabled if `MCP_TRANSPORT=http` (so `docker logs` works); in stdio mode stdout stays clean for the JSON-RPC stream. Set explicitly to override the auto rule. |
 

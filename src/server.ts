@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import http from 'http';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import fastq from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import { SessionManager } from './session.js';
@@ -540,8 +540,11 @@ export class PuppeteerMCPServer {
       try {
         if (authToken) {
           const sent = req.headers['authorization'] ?? '';
-          const expected = `Bearer ${authToken}`;
-          if (sent !== expected) {
+          // Hash both sides: fixed-length digests let timingSafeEqual compare
+          // without leaking length or matching-prefix info.
+          const a = createHash('sha256').update(sent).digest();
+          const b = createHash('sha256').update(`Bearer ${authToken}`).digest();
+          if (!timingSafeEqual(a, b)) {
             res.writeHead(401, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ error: 'unauthorized' }));
             return;
