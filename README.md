@@ -21,7 +21,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license MIT">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat" alt="license MIT">
+  <img src="https://img.shields.io/badge/Bun-1.3.11-orange?style=flat&logo=bun&logoColor=white" alt="bun 1.3.11">
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat" alt="TypeScript 5.9">
 </p>
 
 ## Features
