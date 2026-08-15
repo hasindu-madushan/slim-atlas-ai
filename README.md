@@ -137,8 +137,8 @@ Multi-arch is handled automatically — the build detects the container's arch v
 > **Apple Silicon (M-series Macs):** pass `--platform linux/arm64` to build/run natively. Without it, Docker Desktop may default to `amd64` and run the container under Rosetta, which fails to launch the Lightpanda binary (`rosetta error: failed to open elf …`).
 > ```bash
 > docker build --platform linux/arm64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
-> docker run --platform linux/arm64 -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas
-> ```
+> docker run --platform linux/arm64 --name slimatlas -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret -e LIGHTPANDA_POOL_SIZE=10 -e CHROME_POOL_SIZE=10 slimatlas
+> ``` 
 
 **Headful fallback variant.** The default image runs Lightpanda only (`FALLBACK_BROWSER=none`). To enable the headful Chrome fallback (needed only if you set `FALLBACK_BROWSER=headful` at runtime), build the headful variant — it adds the Chrome runtime libraries + Xvfb (~150MB) and presets `FALLBACK_BROWSER=headful`:
 

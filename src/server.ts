@@ -78,21 +78,19 @@ function normalizeNodeId(args: Record<string, any>): number | undefined {
 }
 
 export class PuppeteerMCPServer {
-  private server: Server;
   private sessionManager: SessionManager = new SessionManager();
   private botDetection: BotDetectionService = new BotDetectionService();
   private rateLimiter: RateLimiter = new RateLimiter();
   private sessionQueues: Map<string, queueAsPromised<ToolTask>> = new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private httpServer: http.Server | null = null;
-  private httpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
+  // One MCP Server per HTTP connection: the SDK's Protocol only allows one
+  // transport at a time, so sharing a single Server across clients throws
+  // "Already connected to a transport" on the second connect. Handlers close
+  // over `this` (shared browser sessions), not the Server instance.
+  private httpTransports: Map<string, { server: Server; transport: StreamableHTTPServerTransport }> = new Map();
 
   constructor() {
-    this.server = new Server(
-      { name: 'slimatlas', version: '1.0.0' },
-      { capabilities: { tools: {} } }
-    );
-    this.setupHandlers();
     this.startCleanupJob();
     if (SKIP_LIGHTPANDA_DOMAINS.length > 0 && !this.sessionManager.hasFallback()) {
       log.warn('server', `SKIP_LIGHTPANDA_DOMAINS set but FALLBACK_BROWSER=none — per-domain skipping is disabled`);
@@ -103,8 +101,17 @@ export class PuppeteerMCPServer {
     log.info('server', `Initialized (fallback=${this.sessionManager.getFallbackType()}). Log file: ${log.getPath()}`);
   }
 
-  private setupHandlers(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+  private createServer(): Server {
+    const server = new Server(
+      { name: 'slimatlas', version: '1.0.0' },
+      { capabilities: { tools: {} } }
+    );
+    this.setupHandlers(server);
+    return server;
+  }
+
+  private setupHandlers(server: Server): void {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: [
           {
@@ -248,7 +255,7 @@ export class PuppeteerMCPServer {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const toolName = request.params.name;
       const args = request.params.arguments as Record<string, any>;
 
@@ -511,8 +518,8 @@ export class PuppeteerMCPServer {
     this.sessionQueues.clear();
     await this.sessionManager.shutdown();
     if (this.httpServer) {
-      for (const t of this.httpTransports.values()) {
-        try { await t.close(); } catch { /* ponytail: best-effort on shutdown */ }
+      for (const entry of this.httpTransports.values()) {
+        try { await entry.transport.close(); } catch { /* ponytail: best-effort on shutdown */ }
       }
       this.httpTransports.clear();
       this.httpServer.close();
@@ -527,7 +534,7 @@ export class PuppeteerMCPServer {
       return;
     }
     const stdio = new StdioServerTransport();
-    await this.server.connect(stdio);
+    await this.createServer().connect(stdio);
     log.info('server', 'MCP server connected via stdio transport');
   }
 
@@ -563,7 +570,7 @@ export class PuppeteerMCPServer {
 
         if (req.method === 'DELETE') {
           if (!existing || !sessionId) { res.writeHead(404); res.end(); return; }
-          await existing.close();
+          await existing.transport.close();
           this.httpTransports.delete(sessionId);
           log.info('server', `HTTP session ${sessionId} deleted`);
           res.writeHead(204); res.end();
@@ -579,7 +586,7 @@ export class PuppeteerMCPServer {
         }
 
         if (existing) {
-          await existing.handleRequest(req, res, parsedBody);
+          await existing.transport.handleRequest(req, res, parsedBody);
           return;
         }
 
@@ -592,7 +599,7 @@ export class PuppeteerMCPServer {
         const newTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
-            this.httpTransports.set(id, newTransport);
+            this.httpTransports.set(id, { server, transport: newTransport });
             log.info('server', `HTTP session ${id} initialized`);
           },
           onsessionclosed: (id) => {
@@ -603,7 +610,8 @@ export class PuppeteerMCPServer {
         newTransport.onerror = (err) => {
           log.error('server', `HTTP transport error: ${err.message}`);
         };
-        await this.server.connect(newTransport);
+        const server = this.createServer();
+        await server.connect(newTransport);
         await newTransport.handleRequest(req, res, parsedBody);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
