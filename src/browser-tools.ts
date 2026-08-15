@@ -1,5 +1,5 @@
 import type { Page } from 'puppeteer';
-import type { PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
+import type { PageInfo, SnapshotResult, ScreenshotOptions, PdfOptions } from './types.js';
 import { treeToString, SNAPSHOT_FORMAT_EXPLANATION, SKIP_TAGS, ELEMENT_TYPE_MAP, INPUT_TYPE_MAP, INTERACTABLE_TAGS, INTERACTIVE_ROLES } from './snapshot-utils.js';
 import { isHumanDelaysEnabled, getRandomTypingDelay, getRandomClickDelay } from './stealth.js';
 
@@ -468,6 +468,11 @@ export class BrowserTools {
     if (options.fullPage) opts.fullPage = true;
     if (options.quality && options.type === 'jpeg') opts.quality = options.quality;
     return await this.page.screenshot(opts) as string;
+  }
+
+  async printPdf(options: PdfOptions = {}): Promise<string> {
+    const buffer = await this.page.pdf({ ...options, printBackground: options.printBackground !== false });
+    return Buffer.from(buffer).toString('base64');
   }
 
   async getHtml(): Promise<string> {

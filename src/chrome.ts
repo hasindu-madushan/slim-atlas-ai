@@ -1,7 +1,7 @@
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page, BrowserContext } from 'puppeteer';
-import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions } from './types.js';
+import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions, PdfOptions } from './types.js';
 import { BrowserTools, type BrowserToolsState, type ViewNodeResult } from './browser-tools.js';
 import { getAntiDetectionArgs, applyStealthToPage, isStealthEnabled } from './stealth.js';
 
@@ -146,6 +146,14 @@ export class ChromeManager {
 
   async takeScreenshot(options: ScreenshotOptions = {}): Promise<string> {
     return this.getTools().takeScreenshot(options);
+  }
+
+  async setContent(html: string): Promise<void> {
+    await this.getPage().setContent(html, { waitUntil: 'load' });
+  }
+
+  async printPdf(options: PdfOptions = {}): Promise<string> {
+    return this.getTools().printPdf(options);
   }
 
   async getHtml(): Promise<string> {

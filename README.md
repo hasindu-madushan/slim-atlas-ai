@@ -301,6 +301,7 @@ mcp.call("browser_close", {"session_id": "abc1"})
 | `browser_reload` | Reload the current page | Refresh dynamic content or recover from stale page state |
 | `browser_get_page_info` | Get current page URL and title | Quick way to verify navigation success and current context |
 | `browser_close` | Close browser session and free resources | Important for cleanup. Sessions auto-close on timeout, but explicit closing is recommended |
+| `browser_print_pdf` | Print current page or a provided HTML document to a base64 PDF | For document/report generation pipelines only — NOT for agent research/browsing. Requires a real-Chrome fallback (`FALLBACK_BROWSER`); accepts a caller-supplied `session_id` (create → print → `browser_close`) |
 
 ## Running Tests
 

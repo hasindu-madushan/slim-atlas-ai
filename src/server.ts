@@ -251,6 +251,34 @@ export class PuppeteerMCPServer {
               },
             },
           },
+          {
+            name: 'browser_print_pdf',
+            description: 'Print the current page — or a provided HTML document — to a PDF and return it as base64 (can be multi-megabyte). This tool is for document/report generation pipelines ONLY, and the caller MUST close the session with browser_close when done. Do NOT use it for research, reading, extracting, screenshotting, or archiving web content — use browser_snapshot or browser_view_node instead.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID. Provide a new ID to create a print session; reuse the same ID to print the same page again; close it with browser_close when done.' },
+                html: { type: 'string', description: 'Self-contained HTML document to load before printing. Omit to print the current page.' },
+                print_background: { type: 'boolean', description: 'Print background graphics', default: true },
+                prefer_css_page_size: { type: 'boolean', description: 'Use the CSS @page size over the default paper size', default: false },
+                display_header_footer: { type: 'boolean', description: 'Display header/footer templates', default: false },
+                header_template: { type: 'string', description: 'HTML template for the page header (Chromium print template; .pageNumber/.totalPages classes available)' },
+                footer_template: { type: 'string', description: 'HTML template for the page footer (Chromium print template; .pageNumber/.totalPages classes available)' },
+                page_ranges: { type: 'string', description: 'Page ranges to print, e.g. "1" or "2-". Numbering counts all pages of the document.' },
+                margin: {
+                  type: 'object',
+                  description: 'Page margins, e.g. {"top":"20mm","bottom":"16mm","left":"16mm","right":"16mm"}',
+                  properties: {
+                    top: { type: 'string' },
+                    bottom: { type: 'string' },
+                    left: { type: 'string' },
+                    right: { type: 'string' },
+                  },
+                },
+              },
+              required: ['session_id'],
+            },
+          },
         ],
       };
     });
@@ -289,7 +317,9 @@ export class PuppeteerMCPServer {
     log.info(sessionId, `Executing ${toolName}`);
     try {
       if (!this.sessionManager.has(sessionId)) {
-        if (toolName !== 'browser_navigate') {
+        // browser_print_pdf may create a session with a caller-supplied id (the
+        // print pipeline generates one up front so it can close it afterwards).
+        if (toolName !== 'browser_navigate' && toolName !== 'browser_print_pdf') {
           return this.textResult(sessionId, 'Session not found. Call browser_navigate first to create a session.', true);
         }
         await this.sessionManager.acquire(sessionId);
@@ -348,7 +378,12 @@ export class PuppeteerMCPServer {
   }
 
   private async executeWithManager(sessionId: string, manager: ChromeManager, toolName: string, args: Record<string, any>): Promise<any> {
-    log.debug(sessionId, `${toolName} args: ${JSON.stringify(args)}`);
+    // The print pipeline passes a full HTML document plus header/footer templates —
+    // never write those to the debug log.
+    const logArgs = toolName === 'browser_print_pdf'
+      ? { ...args, html: args.html ? `<${args.html.length} chars>` : undefined, header_template: undefined, footer_template: undefined }
+      : args;
+    log.debug(sessionId, `${toolName} args: ${JSON.stringify(logArgs)}`);
 
     switch (toolName) {
       case 'browser_navigate': {
@@ -449,6 +484,33 @@ export class PuppeteerMCPServer {
         await this.sessionManager.release(sessionId);
         this.sessionQueues.delete(sessionId);
         return this.textResult(sessionId, `Session ${sessionId} closed`);
+
+      case 'browser_print_pdf': {
+        // PDF needs CDP Page.printToPDF, which lightpanda does not implement —
+        // force the real-Chrome fallback pool.
+        if (this.sessionManager.isOnLightpanda(sessionId)) {
+          if (!this.sessionManager.hasFallback()) {
+            return this.textResult(sessionId, 'PDF requires a real Chrome fallback (FALLBACK_BROWSER=none)', true);
+          }
+          manager = await this.sessionManager.switchToFallback(sessionId);
+        }
+        if (args.html) {
+          await manager.setContent(args.html);
+        }
+        const pdfBase64 = await manager.printPdf({
+          printBackground: args.print_background,
+          preferCSSPageSize: args.prefer_css_page_size,
+          displayHeaderFooter: args.display_header_footer,
+          headerTemplate: args.header_template,
+          footerTemplate: args.footer_template,
+          pageRanges: args.page_ranges,
+          margin: args.margin,
+        });
+        // Base64 goes in a text block (last line): the LangChain mcp-adapter
+        // drops non-text content (resource/image blocks) on direct tool.invoke,
+        // and the pipeline caller parses the final line as the PDF payload.
+        return this.textResult(sessionId, `PDF generated (${Math.round((pdfBase64.length * 3) / 4 / 1024)} KB, ${this.browserTag(sessionId)})\n${pdfBase64}`);
+      }
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);

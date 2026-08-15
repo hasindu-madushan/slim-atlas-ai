@@ -55,6 +55,16 @@ export interface ScreenshotOptions {
   quality?: number;
 }
 
+export interface PdfOptions {
+  printBackground?: boolean;
+  preferCSSPageSize?: boolean;
+  displayHeaderFooter?: boolean;
+  headerTemplate?: string;
+  footerTemplate?: string;
+  pageRanges?: string;
+  margin?: { top?: string; bottom?: string; left?: string; right?: string };
+}
+
 export interface Config {
   headless?: boolean;
   browser?: 'chrome' | 'firefox' | 'webkit';

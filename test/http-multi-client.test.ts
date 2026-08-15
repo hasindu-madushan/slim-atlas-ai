@@ -78,4 +78,24 @@ describe('HTTP multi-client (streamable HTTP)', () => {
     expect(names(toolsA)).toContain('browser_navigate');
     expect(names(toolsA)).toContain('browser_snapshot');
   });
+
+  it('registers browser_print_pdf with an agent-deterring description', async () => {
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await client.connect(transport);
+    clients.push(client);
+
+    const { tools } = await client.listTools();
+    const tool = tools.find(t => t.name === 'browser_print_pdf');
+    expect(tool).toBeDefined();
+    // The description must steer browsing/research agents away from this tool.
+    expect(tool!.description).toMatch(/only/i);
+    expect(tool!.description).toMatch(/Do NOT use/i);
+    expect(tool!.inputSchema).toMatchObject({
+      type: 'object',
+      required: ['session_id'],
+    });
+  });
 });
