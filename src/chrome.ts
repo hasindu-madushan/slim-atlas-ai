@@ -1,5 +1,6 @@
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { fileURLToPath } from 'node:url';
 import type { Browser, Page, BrowserContext } from 'puppeteer';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions, PdfOptions } from './types.js';
 import { BrowserTools, type BrowserToolsState, type ViewNodeResult } from './browser-tools.js';
@@ -154,6 +155,31 @@ export class ChromeManager {
 
   async printPdf(options: PdfOptions = {}): Promise<string> {
     return this.getTools().printPdf(options);
+  }
+
+  // ponytail: vendored self-contained browser bundle (dom-to-pptx@2.1.1) —
+  // installing the package would pull a second puppeteer for one static file.
+  // Upgrade: replace src/vendor/dom-to-pptx.bundle.js from dist/ of the new version.
+  async exportPptx(selector: string): Promise<{ base64: string; slides: number }> {
+    const page = this.getPage();
+    // Slides are authored at final pixel size (convention 1920x1080); a wide
+    // viewport keeps vw/vh units and media queries honest during measurement.
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.addScriptTag({ path: fileURLToPath(new URL('./vendor/dom-to-pptx.bundle.js', import.meta.url)) });
+    return page.evaluate(async (sel) => {
+      await (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready;
+      const targets = Array.from(document.querySelectorAll(sel));
+      if (targets.length === 0) throw new Error(`No elements matching slide selector "${sel}"`);
+      const lib = (window as unknown as { domToPptx?: { exportToPptx: (t: Element[], o: object) => Promise<Blob> } }).domToPptx;
+      if (!lib?.exportToPptx) throw new Error('dom-to-pptx bundle did not load');
+      const blob = await lib.exportToPptx(targets, {});
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return { base64: btoa(bin), slides: targets.length };
+    }, selector);
   }
 
   async getHtml(): Promise<string> {

@@ -139,6 +139,7 @@ Live source of truth: the `tools/list` MCP response. Currently exposed:
 - `browser_get_page_info` — Current URL and title.
 - `browser_close` — Close the session and free resources.
 - `browser_print_pdf` — Print current page or a provided HTML document to a base64 PDF. Forces the real-Chrome fallback (lightpanda has no `Page.printToPDF`). **Pipeline-only** (report/document generation, called programmatically by clients such as GeniusLaunch) — not for agents doing research/browsing; the caller must `browser_close` the session afterwards.
+- `browser_export_pptx` — Convert current page or a provided HTML document to a base64 .pptx via dom-to-pptx (slides = `selector` matches, default `.slide`, authored at final pixel size e.g. 1920x1080). Forces the real-Chrome fallback (lightpanda's JS engine measures elements wrong and yields empty slides). The converter bundle is vendored at `src/vendor/dom-to-pptx.bundle.js`. **Pipeline-only** (deck generation) — not for agents doing research/browsing; the caller must `browser_close` the session afterwards.
 
 ## Gotchas
 

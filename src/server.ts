@@ -279,6 +279,19 @@ export class PuppeteerMCPServer {
               required: ['session_id'],
             },
           },
+          {
+            name: 'browser_export_pptx',
+            description: 'Convert the current page — or a provided HTML document — into an editable PowerPoint (.pptx) via dom-to-pptx and return it as base64 (can be multi-megabyte). Slides are the elements matching "selector" (default ".slide"), each laid out at final pixel size (e.g. 1920x1080). This tool is for deck generation pipelines ONLY, and the caller MUST close the session with browser_close when done.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                session_id: { type: 'string', description: 'Session ID. Provide a new ID to create an export session; reuse the same ID to export the same page again; close it with browser_close when done.' },
+                html: { type: 'string', description: 'Self-contained HTML document to load before conversion. Omit to convert the current page.' },
+                selector: { type: 'string', description: 'CSS selector matching the slide elements', default: '.slide' },
+              },
+              required: ['session_id'],
+            },
+          },
         ],
       };
     });
@@ -317,9 +330,10 @@ export class PuppeteerMCPServer {
     log.info(sessionId, `Executing ${toolName}`);
     try {
       if (!this.sessionManager.has(sessionId)) {
-        // browser_print_pdf may create a session with a caller-supplied id (the
-        // print pipeline generates one up front so it can close it afterwards).
-        if (toolName !== 'browser_navigate' && toolName !== 'browser_print_pdf') {
+        // browser_print_pdf / browser_export_pptx may create a session with a
+        // caller-supplied id (the pipelines generate one up front so they can
+        // close it afterwards).
+        if (toolName !== 'browser_navigate' && toolName !== 'browser_print_pdf' && toolName !== 'browser_export_pptx') {
           return this.textResult(sessionId, 'Session not found. Call browser_navigate first to create a session.', true);
         }
         await this.sessionManager.acquire(sessionId);
@@ -378,9 +392,9 @@ export class PuppeteerMCPServer {
   }
 
   private async executeWithManager(sessionId: string, manager: ChromeManager, toolName: string, args: Record<string, any>): Promise<any> {
-    // The print pipeline passes a full HTML document plus header/footer templates —
-    // never write those to the debug log.
-    const logArgs = toolName === 'browser_print_pdf'
+    // The print/export pipelines pass a full HTML document plus header/footer
+    // templates — never write those to the debug log.
+    const logArgs = toolName === 'browser_print_pdf' || toolName === 'browser_export_pptx'
       ? { ...args, html: args.html ? `<${args.html.length} chars>` : undefined, header_template: undefined, footer_template: undefined }
       : args;
     log.debug(sessionId, `${toolName} args: ${JSON.stringify(logArgs)}`);
@@ -510,6 +524,23 @@ export class PuppeteerMCPServer {
         // drops non-text content (resource/image blocks) on direct tool.invoke,
         // and the pipeline caller parses the final line as the PDF payload.
         return this.textResult(sessionId, `PDF generated (${Math.round((pdfBase64.length * 3) / 4 / 1024)} KB, ${this.browserTag(sessionId)})\n${pdfBase64}`);
+      }
+
+      case 'browser_export_pptx': {
+        // dom-to-pptx measures computed layout (getBoundingClientRect per
+        // element), which lightpanda's JS engine cannot produce — it yields
+        // structurally-valid but EMPTY slides. Force the real-Chrome fallback.
+        if (this.sessionManager.isOnLightpanda(sessionId)) {
+          if (!this.sessionManager.hasFallback()) {
+            return this.textResult(sessionId, 'PPTX export requires a real Chrome fallback (FALLBACK_BROWSER=none)', true);
+          }
+          manager = await this.sessionManager.switchToFallback(sessionId);
+        }
+        if (args.html) {
+          await manager.setContent(args.html);
+        }
+        const { base64, slides } = await manager.exportPptx(args.selector ?? '.slide');
+        return this.textResult(sessionId, `PPTX generated (${Math.round((base64.length * 3) / 4 / 1024)} KB, ${slides} slides, ${this.browserTag(sessionId)})\n${base64}`);
       }
 
       default:
