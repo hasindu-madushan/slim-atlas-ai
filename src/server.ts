@@ -288,6 +288,7 @@ export class PuppeteerMCPServer {
                 session_id: { type: 'string', description: 'Session ID. Provide a new ID to create an export session; reuse the same ID to export the same page again; close it with browser_close when done.' },
                 html: { type: 'string', description: 'Self-contained HTML document to load before conversion. Omit to convert the current page.' },
                 selector: { type: 'string', description: 'CSS selector matching the slide elements', default: '.slide' },
+                with_previews: { type: 'boolean', description: 'Also return a base64 PNG screenshot of each slide, captured from the rendered page before conversion (for LLM visual QA)', default: false },
               },
               required: ['session_id'],
             },
@@ -539,8 +540,14 @@ export class PuppeteerMCPServer {
         if (args.html) {
           await manager.setContent(args.html);
         }
-        const { base64, slides } = await manager.exportPptx(args.selector ?? '.slide');
-        return this.textResult(sessionId, `PPTX generated (${Math.round((base64.length * 3) / 4 / 1024)} KB, ${slides} slides, ${this.browserTag(sessionId)})\n${base64}`);
+        const { base64, slides, previews } = await manager.exportPptx(args.selector ?? '.slide', args.with_previews === true);
+        const summary = `PPTX generated (${Math.round((base64.length * 3) / 4 / 1024)} KB, ${slides} slides, ${this.browserTag(sessionId)})`;
+        // Without previews the pptx base64 stays the final line (pdf-pipeline
+        // contract). With previews, slide PNGs come between markers so callers
+        // can split base64 payloads deterministically.
+        return this.textResult(sessionId, previews.length > 0
+          ? `${summary}\n---previews---\n${previews.join('\n')}\n---pptx---\n${base64}`
+          : `${summary}\n${base64}`);
       }
 
       default:

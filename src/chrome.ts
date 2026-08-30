@@ -160,13 +160,21 @@ export class ChromeManager {
   // ponytail: vendored self-contained browser bundle (dom-to-pptx@2.1.1) —
   // installing the package would pull a second puppeteer for one static file.
   // Upgrade: replace src/vendor/dom-to-pptx.bundle.js from dist/ of the new version.
-  async exportPptx(selector: string): Promise<{ base64: string; slides: number }> {
+  async exportPptx(selector: string, withPreviews = false): Promise<{ base64: string; slides: number; previews: string[] }> {
     const page = this.getPage();
     // Slides are authored at final pixel size (convention 1920x1080); a wide
     // viewport keeps vw/vh units and media queries honest during measurement.
     await page.setViewport({ width: 1920, height: 1080 });
+    // Previews first: capture the exact layout the pptx will be built from,
+    // before the converter touches the DOM.
+    const previews: string[] = [];
+    if (withPreviews) {
+      for (const el of await page.$$(selector)) {
+        previews.push(await el.screenshot({ type: 'png', encoding: 'base64' }));
+      }
+    }
     await page.addScriptTag({ path: fileURLToPath(new URL('./vendor/dom-to-pptx.bundle.js', import.meta.url)) });
-    return page.evaluate(async (sel) => {
+    const result = await page.evaluate(async (sel) => {
       await (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready;
       const targets = Array.from(document.querySelectorAll(sel));
       if (targets.length === 0) throw new Error(`No elements matching slide selector "${sel}"`);
@@ -180,6 +188,7 @@ export class ChromeManager {
       }
       return { base64: btoa(bin), slides: targets.length };
     }, selector);
+    return { ...result, previews };
   }
 
   async getHtml(): Promise<string> {
