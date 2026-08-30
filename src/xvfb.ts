@@ -51,6 +51,9 @@ export async function ensureDisplay(): Promise<DisplayHandle> {
       return {
         kill: () => {
           try { proc.kill('SIGTERM'); } catch {}
+          // We set DISPLAY for this Xvfb; clear it so a later relaunch
+          // doesn't skip Xvfb startup against the now-dead display.
+          if (process.env.DISPLAY === display) delete process.env.DISPLAY;
         },
         display,
       };
