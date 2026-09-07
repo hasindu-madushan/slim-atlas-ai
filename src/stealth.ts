@@ -54,15 +54,60 @@ export function getAntiDetectionArgs(headless: boolean = true): string[] {
     args.push('--disable-gpu');
   }
 
-  const proxy = process.env.PROXY_SERVER;
+  const proxy = getProxyConfig();
   if (proxy) {
-    args.push(`--proxy-server=${proxy}`);
+    // Clean scheme://host:port — Chromium silently discards the whole value
+    // (and connects DIRECT) if credentials are embedded in --proxy-server.
+    args.push(`--proxy-server=${proxy.url}`);
   }
 
   return args;
 }
 
+// PROXY_SERVER accepts http://user:pass@host:port (credentials optional) or the
+// host:port:user:pass form proxy dashboards print. Credentials are stripped from
+// the launch URL and supplied per-page via page.authenticate() instead, because
+// neither Chromium's --proxy-server nor Lightpanda's --http-proxy honors them.
+export interface ProxyConfig {
+  url: string;  // clean scheme://host:port for browser launch flags
+  auth: { username: string; password: string } | null;
+}
+
+export function getProxyConfig(): ProxyConfig | null {
+  const raw = process.env.PROXY_SERVER;
+  if (!raw) return null;
+
+  let candidate = raw;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
+    const parts = candidate.split(':');
+    candidate = parts.length === 4
+      ? `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`  // host:port:user:pass
+      : `http://${candidate}`;
+  }
+
+  let u: URL;
+  try {
+    u = new URL(candidate);
+  } catch {
+    return null;
+  }
+
+  // URL getters percent-encode userinfo characters (=, @, ...) per the WHATWG spec,
+  // so decode back to the raw credentials the proxy expects.
+  const auth = u.username && u.password
+    ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) }
+    : null;
+  return { url: `${u.protocol}//${u.host}`, auth };
+}
+
 export async function applyStealthToPage(page: Page): Promise<void> {
+  // Proxy auth applies regardless of the stealth toggle — an authenticated proxy
+  // without it returns 407 on every request.
+  const proxy = getProxyConfig();
+  if (proxy?.auth) {
+    await page.authenticate({ username: proxy.auth.username, password: proxy.auth.password });
+  }
+
   if (!STEALTH_ENABLED) return;
 
   const config = getStealthConfig();

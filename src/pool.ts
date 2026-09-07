@@ -191,6 +191,8 @@ export class LightpandaPool {
     await Bun.sleep(200);
 
     log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
+    // Lightpanda's --http-proxy supports inline basic auth (user:pass@host:port),
+    // verified against an authenticated proxy; credentials pass through untouched.
     const proc = Bun.spawn([lightpandaPath, ...buildLightpandaServeArgs(port, process.env.PROXY_SERVER)], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     proc.exited.then((code) => {

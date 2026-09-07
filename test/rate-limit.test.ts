@@ -80,6 +80,22 @@ describe('RateLimiter', () => {
     expect(Date.now() - start).toBeLessThan(50);
   });
 
+  it('staggers concurrent hits to the same domain instead of releasing them as one burst', async () => {
+    const minDelay = 100;
+    const rl = new RateLimiter(['g2.com'], minDelay);
+    const start = Date.now();
+    const wakes: number[] = [];
+    await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        rl.throttle(`s${i}`, `https://g2.com/${i}`).then(() => wakes.push(Date.now() - start)))
+    );
+    wakes.sort((a, b) => a - b);
+    // One caller passes immediately; each subsequent one must be spaced >= minDelay
+    // after the previous slot, so the last wake cannot land before 4 * minDelay.
+    // (Timer slack makes wakes late, never early — lower bound only.)
+    expect(wakes[4]).toBeGreaterThanOrEqual(4 * minDelay - 20);
+  });
+
   describe('wildcard patterns', () => {
     it('"*" matches every host and keys each host independently', () => {
       const rl = new RateLimiter(['*'], 1000);

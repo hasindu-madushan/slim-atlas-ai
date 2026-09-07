@@ -24,6 +24,24 @@ const SKIP_LIGHTPANDA_DOMAINS = (process.env.SKIP_LIGHTPANDA_DOMAINS || '')
 
 const SESSION_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
+// Reddit-style JS challenges redirect while the page is being evaluated, destroying the
+// execution context mid-operation. The challenge cookie is already set by then, so a
+// retry on the settled page almost always succeeds on the first re-attempt.
+function isContextDestroyed(e: unknown): boolean {
+  return String((e as Error)?.message ?? e).includes('Execution context was destroyed');
+}
+
+async function retryOnContextDestroyed<T>(sessionId: string, op: () => Promise<T>, attempts = 2): Promise<T> {
+  try {
+    return await op();
+  } catch (e) {
+    if (attempts <= 0 || !isContextDestroyed(e)) throw e;
+    log.warn(sessionId, 'Execution context destroyed mid-operation (challenge redirect?), retrying after settle');
+    await new Promise(r => setTimeout(r, 1500));
+    return retryOnContextDestroyed(sessionId, op, attempts - 1);
+  }
+}
+
 interface ToolTask {
   sessionId: string;
   toolName: string;
@@ -60,7 +78,8 @@ function isCrashError(error: any): boolean {
 }
 
 function isTimeoutError(error: any): boolean {
-  return errMsg(error).includes('timeout') || errMsg(error).includes('timed out');
+  // 'timedout' also catches Lightpanda's 'OperationTimedout' (no space).
+  return errMsg(error).includes('timeout') || errMsg(error).includes('timed out') || errMsg(error).includes('timedout');
 }
 
 function isCrashOrTimeout(error: any): boolean {
@@ -412,12 +431,12 @@ export class PuppeteerMCPServer {
           manager = await this.sessionManager.switchToFallback(sessionId);
         }
 
-        manager = await this.navigateOn(sessionId, manager, url, waitUntil);
+        manager = await retryOnContextDestroyed(sessionId, () => this.navigateOn(sessionId, manager, url, waitUntil));
         this.sessionManager.getHistory(sessionId)?.record({ type: 'navigate', url, waitUntil });
 
         let info: PageInfo;
         try {
-          info = await manager.getPageInfo();
+          info = await retryOnContextDestroyed(sessionId, () => manager.getPageInfo());
         } catch (e: any) {
           if (this.sessionManager.isOnLightpanda(sessionId) && isTimeoutError(e) && this.sessionManager.hasFallback()) {
             log.warn(sessionId, `getPageInfo timed out on lightpanda, escalating to ${this.sessionManager.getFallbackType()}`);
@@ -444,7 +463,14 @@ export class PuppeteerMCPServer {
             manager = await this.sessionManager.switchToFallback(sessionId);
           }
         }
-        const snapshot = await manager.getSnapshot(args.show_urls === true);
+        let snapshot = await retryOnContextDestroyed(sessionId, () => manager.getSnapshot(args.show_urls === true));
+        // An empty tree means the page was caught mid-redirect (e.g. a challenge's
+        // second hop) — settle briefly and take the snapshot again.
+        if (snapshot.accessibilityTree.split('\n').filter(l => /^\s*-\s/.test(l)).length === 0) {
+          log.warn(sessionId, 'Empty snapshot (mid-redirect?), retrying after settle');
+          await new Promise(r => setTimeout(r, 2500));
+          snapshot = await retryOnContextDestroyed(sessionId, () => manager.getSnapshot(args.show_urls === true));
+        }
         return this.textResult(sessionId, snapshot.accessibilityTree);
       }
 
