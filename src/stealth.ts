@@ -73,6 +73,12 @@ export function getAntiDetectionArgs(headless: boolean = true): string[] {
     // Clean scheme://host:port — Chromium silently discards the whole value
     // (and connects DIRECT) if credentials are embedded in --proxy-server.
     args.push(`--proxy-server=${proxy.url}`);
+    // Some targets (e.g. Cloudflare-fronted sites) challenge the proxy's exit IP
+    // harder than the local IP — semicolon-separated domains here bypass the proxy.
+    const bypass = process.env.PROXY_BYPASS_DOMAINS;
+    if (bypass) {
+      args.push(`--proxy-bypass-list=<-loopback>;${bypass.split(',').map(d => d.trim()).filter(Boolean).join(';')}`);
+    }
   }
 
   return args;
@@ -83,7 +89,8 @@ export function getAntiDetectionArgs(headless: boolean = true): string[] {
 // the launch URL and supplied per-page via page.authenticate() instead, because
 // neither Chromium's --proxy-server nor Lightpanda's --http-proxy honors them.
 export interface ProxyConfig {
-  url: string;  // clean scheme://host:port for browser launch flags
+  url: string;      // clean scheme://host:port for browser launch flags
+  fullUrl: string;  // scheme://user:pass@host:port with credentials inline, for engines that support inline auth (lightpanda)
   auth: { username: string; password: string } | null;
 }
 
@@ -111,7 +118,7 @@ export function getProxyConfig(): ProxyConfig | null {
   const auth = u.username && u.password
     ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) }
     : null;
-  return { url: `${u.protocol}//${u.host}`, auth };
+  return { url: `${u.protocol}//${u.host}`, fullUrl: candidate, auth };
 }
 
 export async function applyStealthToPage(page: Page): Promise<void> {

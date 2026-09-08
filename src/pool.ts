@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, writeFileSync, renameSync, chmodSync, unlinkSync } from 'fs';
 import { log } from './logger.js';
-import { applyLightpandaStealth } from './stealth.js';
+import { applyLightpandaStealth, getProxyConfig } from './stealth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -194,8 +194,9 @@ export class LightpandaPool {
 
     log.info('pool', `Spawning Lightpanda ${id} on port ${port}`);
     // Lightpanda's --http-proxy supports inline basic auth (user:pass@host:port),
-    // verified against an authenticated proxy; credentials pass through untouched.
-    const proc = Bun.spawn([lightpandaPath, ...buildLightpandaServeArgs(port, process.env.PROXY_SERVER)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // verified against an authenticated proxy; getProxyConfig normalizes the
+    // host:port:user:pass dashboard form into a URL lightpanda can resolve.
+    const proc = Bun.spawn([lightpandaPath, ...buildLightpandaServeArgs(port, getProxyConfig()?.fullUrl)], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     proc.exited.then((code) => {
       log.warn('pool', `${id} exited with code ${code}`);

@@ -15,6 +15,7 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'human-delays-enabled': 'HUMAN_DELAYS_ENABLED',
   'user-agent': 'USER_AGENT',
   'proxy-server': 'PROXY_SERVER',
+  'proxy-bypass-domains': 'PROXY_BYPASS_DOMAINS',
   'cleanup-interval-ms': 'CLEANUP_INTERVAL_MS',
   'session-idle-timeout-ms': 'SESSION_IDLE_TIMEOUT_MS',
   'resource-logging-enabled': 'RESOURCE_LOGGING_ENABLED',
