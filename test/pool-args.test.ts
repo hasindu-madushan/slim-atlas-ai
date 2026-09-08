@@ -6,7 +6,7 @@ describe('buildLightpandaServeArgs', () => {
     const args = buildLightpandaServeArgs(9222);
     expect(args).toEqual([
       'serve', '--log_level', 'warn',
-      '--host', '127.0.0.1', '--port', '9222', '--timeout', '86400',
+      '--host', '127.0.0.1', '--port', '9222',
     ]);
     expect(args).not.toContain('--http-proxy');
   });
@@ -16,8 +16,8 @@ describe('buildLightpandaServeArgs', () => {
     expect(args.indexOf('--http-proxy')).toBeGreaterThan(-1);
     const idx = args.indexOf('--http-proxy');
     expect(args[idx + 1]).toBe('http://user:pass@host:8080');
-    // proxy goes at the tail (9 base args + flag + value = 11)
-    expect(args.length).toBe(11);
+    // proxy goes at the tail (7 base args + flag + value = 9)
+    expect(args.length).toBe(9);
     expect(args[args.length - 2]).toBe('--http-proxy');
   });
 

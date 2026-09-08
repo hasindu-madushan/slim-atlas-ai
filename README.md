@@ -139,6 +139,23 @@ Multi-arch is handled automatically — the build detects the container's arch v
 > docker build --platform linux/arm64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
 > docker run --platform linux/arm64 --name slimatlas -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret -e LIGHTPANDA_POOL_SIZE=20 -e CHROME_POOL_SIZE=10 -e SKIP_LIGHTPANDA_DOMAINS=reddit.com -e RATE_LIMIT_DOMAINS=reddit.com -e RATE_LIMIT_MIN_DELAY_MS=10000 slimatlas
 > ``` 
+>
+> **Note on bot-checked sites (Reddit and friends):** on `linux/arm64` the image falls back to Debian Chromium, which current bot walls (e.g. Reddit's "Prove your humanity") serve an interactive challenge to regardless of stealth settings. Verified against Reddit: the same container on `linux/amd64` — which pins **Chrome-for-Testing** (default `131.0.6778.204`, current stable gets walled) — renders threads fine. Prefer the amd64 image for bot-checked targets (on M-series Macs it runs under Rosetta; Lightpanda works there since the x86_64 binary is bundled at build time).
+> Full worked example with proxy + rate limiting (Reddit via Chrome fallback, everything else via Lightpanda, both layers through the proxy):
+> ```bash
+> docker build --platform linux/amd64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
+> docker rm -f slimatlas
+> docker run -d --name slimatlas -p 8080:8080 \
+>   -e MCP_AUTH_TOKEN=s3cret \
+>   -e SKIP_LIGHTPANDA_DOMAINS=reddit.com \
+>   -e RATE_LIMIT_DOMAINS=reddit.com \
+>   -e RATE_LIMIT_MIN_DELAY_MS=10000 \
+>   -e RATE_LIMIT_JITTER_MS=1500 \
+>   -e TZ=America/New_York \
+>   -e PROXY_SERVER="http://user:pass@proxy-host:port" \
+>   slimatlas
+> ```
+> Omit `PROXY_SERVER` (and `TZ`) if you don't use a proxy. The pinned Chrome version is overridable at build time with `--build-arg CHROME_CFT_VERSION=<version>` if a site's wall ever starts flagging it.
 
 **Headful fallback variant.** The default image runs Lightpanda only (`FALLBACK_BROWSER=none`). To enable the headful Chrome fallback (needed only if you set `FALLBACK_BROWSER=headful` at runtime), build the headful variant — it adds the Chrome runtime libraries + Xvfb (~150MB) and presets `FALLBACK_BROWSER=headful`:
 

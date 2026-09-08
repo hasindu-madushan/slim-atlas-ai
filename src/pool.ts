@@ -51,9 +51,11 @@ const BASE_PORT = parseInt(process.env.LIGHTPANDA_BASE_PORT || '9222', 10);
 const MAX_SIZE = parseInt(process.env.LIGHTPANDA_POOL_SIZE || '5', 10);
 
 export function buildLightpandaServeArgs(port: number, proxy?: string): string[] {
+  // No --timeout: newer nightly lightpanda builds (observed on x86_64) reject it with
+  // a fatal "unknown argument"; instance lifetime is managed by the pool anyway.
   const args = [
     'serve', '--log_level', 'warn',
-    '--host', '127.0.0.1', '--port', port.toString(), '--timeout', '86400',
+    '--host', '127.0.0.1', '--port', port.toString(),
   ];
   if (proxy) args.push('--http-proxy', proxy);
   return args;

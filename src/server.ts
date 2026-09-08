@@ -464,11 +464,13 @@ export class PuppeteerMCPServer {
           }
         }
         let snapshot = await retryOnContextDestroyed(sessionId, () => manager.getSnapshot(args.show_urls === true));
-        // An empty tree means the page was caught mid-redirect (e.g. a challenge's
-        // second hop) — settle briefly and take the snapshot again.
-        if (snapshot.accessibilityTree.split('\n').filter(l => /^\s*-\s/.test(l)).length === 0) {
-          log.warn(sessionId, 'Empty snapshot (mid-redirect?), retrying after settle');
-          await new Promise(r => setTimeout(r, 2500));
+        // A tiny tree means the page was caught mid-redirect (e.g. a challenge's second
+        // hop still settling) — wait longer and take the snapshot again. Genuinely small
+        // pages just snapshot twice; the second result is returned either way.
+        const nodeLineCount = () => snapshot.accessibilityTree.split('\n').filter(l => /^\s*-\s/.test(l)).length;
+        if (nodeLineCount() < 40) {
+          log.warn(sessionId, `Sparse snapshot (${nodeLineCount()} nodes, mid-redirect?), retrying after settle`);
+          await new Promise(r => setTimeout(r, 3500));
           snapshot = await retryOnContextDestroyed(sessionId, () => manager.getSnapshot(args.show_urls === true));
         }
         return this.textResult(sessionId, snapshot.accessibilityTree);

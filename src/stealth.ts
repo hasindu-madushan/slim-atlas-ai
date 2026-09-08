@@ -1,7 +1,17 @@
 import type { Page } from 'puppeteer';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 const STEALTH_ENABLED = process.env.STEALTH_ENABLED !== 'false';
 const HUMAN_DELAYS_ENABLED = process.env.HUMAN_DELAYS_ENABLED !== 'false';
+
+// Real browser, real UA: the plugin's user-agent-override evasion rewrites the UA to a
+// Windows profile while the underlying build is Linux; risk engines flag the mismatch
+// (Reddit walls it). Everything else the plugin patches stays enabled.
+export const createStealthPlugin = (): ReturnType<typeof StealthPlugin> => {
+  const plugin = StealthPlugin();
+  plugin.enabledEvasions.delete('user-agent-override');
+  return plugin;
+};
 
 // ponytail: removed the stale Chrome 124/125 UA pool — Reddit's "whoa there,
 // pardner" block flags spoofed/alternate UAs. By default we now send Chrome's
@@ -48,6 +58,10 @@ export function getAntiDetectionArgs(headless: boolean = true): string[] {
     '--disable-blink-features=AutomationControlled',
     '--disable-features=IsolateOrigins,site-per-process',
     '--disable-site-isolation-trials',
+    // Chrome >=132 gates the SwiftShader software-WebGL fallback behind this flag; in a
+    // GPU-less container (Xvfb) getContext('webgl') otherwise returns null, which risk
+    // engines read as an instant "headless container" classification.
+    '--enable-unsafe-swiftshader',
   ];
 
   if (headless) {
@@ -124,15 +138,31 @@ export async function applyStealthToPage(page: Page): Promise<void> {
     Object.defineProperty(navigator, 'languages', {
       get: () => ['en-US', 'en'],
     });
-    Object.defineProperty(navigator, 'platform', {
-      get: () => 'Win32',
-    });
+    // No navigator.platform override: claiming Win32 on a Linux build contradicts the
+    // rest of the fingerprint (UA, fonts, WebGL) and risk engines flag the mismatch.
     Object.defineProperty(navigator, 'hardwareConcurrency', {
       get: () => 8,
     });
     Object.defineProperty(navigator, 'deviceMemory', {
       get: () => 8,
     });
+
+    // Containers render with no GPU (Xvfb + SwiftShader), so the WebGL renderer string
+    // reads "headless container" to risk engines. Report a plausible desktop Intel iGPU
+    // instead — consistent with a Linux x86_64 desktop UA. 37445/37446 are
+    // UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL from WEBGL_debug_renderer_info.
+    const w = globalThis as any;
+    const gpuVendor = 'Intel Inc.';
+    const gpuRenderer = 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6 (Core Profile) Mesa 23.2.1)';
+    for (const proto of [w.WebGLRenderingContext, w.WebGL2RenderingContext]) {
+      if (!proto?.prototype?.getParameter) continue;
+      const original = proto.prototype.getParameter;
+      proto.prototype.getParameter = function (this: any, parameter: number) {
+        if (parameter === 37445) return gpuVendor;
+        if (parameter === 37446) return gpuRenderer;
+        return original.call(this, parameter);
+      };
+    }
   });
 }
 
@@ -170,9 +200,6 @@ export async function applyLightpandaStealth(page: Page): Promise<void> {
     });
     Object.defineProperty(navigator, 'languages', {
       get: () => ['en-US', 'en'],
-    });
-    Object.defineProperty(navigator, 'platform', {
-      get: () => 'Win32',
     });
     Object.defineProperty(navigator, 'hardwareConcurrency', {
       get: () => 8,

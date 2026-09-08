@@ -1,15 +1,14 @@
 import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { fileURLToPath } from 'node:url';
 import type { Browser, Page, BrowserContext } from 'puppeteer';
 import type { NavigateOptions, PageInfo, SnapshotResult, ScreenshotOptions, PdfOptions } from './types.js';
 import { BrowserTools, type BrowserToolsState, type ViewNodeResult } from './browser-tools.js';
-import { getAntiDetectionArgs, applyStealthToPage, isStealthEnabled } from './stealth.js';
+import { createStealthPlugin, getAntiDetectionArgs, applyStealthToPage, isStealthEnabled } from './stealth.js';
 
 const DEFAULT_WAIT_UNTIL = (process.env.NAVIGATE_WAIT_UNTIL || 'domcontentloaded') as NavigateOptions['waitUntil'];
 const DEFAULT_NAVIGATE_TIMEOUT = parseInt(process.env.NAVIGATE_TIMEOUT || '30000', 10);
 
-puppeteer.use(StealthPlugin());
+puppeteer.use(createStealthPlugin());
 
 const CHROME_LAUNCH_ARGS = [
   '--no-sandbox',
