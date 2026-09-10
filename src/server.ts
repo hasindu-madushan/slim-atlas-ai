@@ -73,7 +73,10 @@ function isCrashError(error: any): boolean {
     msg.includes('segmentation') ||
     msg.includes('detached') ||
     msg.includes('not connected') ||
-    msg.includes('connection closed')
+    msg.includes('connection closed') ||
+    // Lightpanda surfaces proxy-refused tunnels (e.g. providers blocking .gov
+    // domains) as CouldntConnect — escalate so the fallback can try the domain.
+    msg.includes('couldntconnect')
   );
 }
 
@@ -356,7 +359,7 @@ export class PuppeteerMCPServer {
         if (toolName !== 'browser_navigate' && toolName !== 'browser_print_pdf' && toolName !== 'browser_export_pptx') {
           return this.textResult(sessionId, 'Session not found. Call browser_navigate first to create a session.', true);
         }
-        await this.sessionManager.acquire(sessionId);
+        await this.sessionManager.acquire(sessionId, typeof args.url === 'string' ? args.url : undefined);
       }
 
       const manager = await this.sessionManager.ensureConnected(sessionId);

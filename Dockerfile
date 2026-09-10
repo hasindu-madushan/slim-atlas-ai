@@ -52,5 +52,11 @@ ENV MCP_TRANSPORT=http \
     MCP_HOST=0.0.0.0 \
     MCP_PORT=8080 \
     LIGHTPANDA_VERSION=nightly
-# ponytail: Bun runs TypeScript natively — no build step needed
-CMD ["bun", "run", "src/index.ts"]
+# ponytail: Bun runs TypeScript natively — no build step needed.
+# The shell watchdog polls the trivial /foo route (auth-gated but always answered by a
+# live event loop). If the runtime freezes, the watchdog SIGKILLs the server (SIGTERM
+# is useless — a frozen loop never runs the handler) and exits so the container's
+# restart policy brings it back — a wedged server self-heals.
+HEALTHCHECK --interval=15s --timeout=6s --start-period=10s --retries=3 \
+  CMD bun -e "await fetch('http://127.0.0.1:8080/foo').then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+CMD ["sh", "-c", "bun src/index.ts & SRV=$!; while sleep 30; do bun -e \"await fetch('http://127.0.0.1:8080/foo', { signal: AbortSignal.timeout(8000) }).catch(() => process.exit(1))\" || { echo '[watchdog] server unresponsive, killing for restart' >&2; kill -9 $SRV 2>/dev/null; pkill -9 -P $SRV 2>/dev/null; sleep 1; exit 1; }; done; wait $SRV"]

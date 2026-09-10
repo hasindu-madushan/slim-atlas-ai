@@ -121,6 +121,24 @@ export function getProxyConfig(): ProxyConfig | null {
   return { url: `${u.protocol}//${u.host}`, fullUrl: candidate, auth };
 }
 
+// PROXY_BYPASS_DOMAINS applies to BOTH browsers: Chrome gets a --proxy-bypass-list
+// flag, and the Lightpanda pool spawns direct (unproxied) instances for matching
+// URLs. Entries match a host and its subdomains ("domain.tld") or subdomains only
+// ("*.domain.tld"); "www." is ignored like in the skip-lightpanda list.
+export function isProxyBypassedUrl(url: string): boolean {
+  const domains = (process.env.PROXY_BYPASS_DOMAINS || '')
+    .split(',')
+    .map(d => d.trim().toLowerCase().replace(/^\*\./, ''))
+    .filter(Boolean);
+  if (domains.length === 0) return false;
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return domains.some(d => h === d || h.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
+
 export async function applyStealthToPage(page: Page): Promise<void> {
   // Proxy auth applies regardless of the stealth toggle — an authenticated proxy
   // without it returns 407 on every request.

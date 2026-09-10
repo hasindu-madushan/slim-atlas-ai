@@ -142,11 +142,11 @@ Multi-arch is handled automatically — the build detects the container's arch v
 >
 > **Note on bot-checked sites (Reddit, Cloudflare-fronted sites):** on `linux/arm64` the image falls back to Debian Chromium, which current bot walls (e.g. Reddit's "Prove your humanity", Cloudflare "Just a moment...") serve an interactive challenge to regardless of stealth settings. Verified against Reddit: the same container on `linux/amd64` — which pins **Chrome-for-Testing** (default `131.0.6778.204`; current-generation stable builds get walled) — renders threads fine. Prefer the amd64 image for bot-checked targets (on M-series Macs it runs under Rosetta; Lightpanda works there since the x86_64 binary is bundled at build time).
 >
-> **Engine choice:** Lightpanda (proxied) renders Reddit threads on its own, so the recommended config does NOT skip-list it — Lightpanda handles everything cheaply and the bot-detection layer auto-escalates a session to the Chrome 131 fallback when a challenge appears. Add `-e SKIP_LIGHTPANDA_DOMAINS=reddit.com` only if you want to force threads straight onto Chrome.
+> **Engine choice / proxy:** BOTH browser layers route through `PROXY_SERVER` (same credentials; Lightpanda via inline-auth `--http-proxy`, Chrome via `--proxy-server` + `page.authenticate`). Reddit renders through proxied Lightpanda directly; when a session hits a challenge, the bot-detection layer escalates it to the Chrome 131 fallback. Add `-e SKIP_LIGHTPANDA_DOMAINS=reddit.com` to force threads straight onto Chrome instead.
 >
-> **Proxy notes:** `PROXY_SERVER` accepts `http://user:pass@host:port` or the `host:port:user:pass` dashboard form (normalized internally; both browser layers get credentials). Rotating shared residential exits pass Reddit but get challenged by Cloudflare on some sites; `-e PROXY_BYPASS_DOMAINS=a.com,b.com` makes Chrome route those domains DIRECT (Lightpanda still uses the proxy and escalates to Chrome, which then bypasses). Sticky sessions (`gate.<provider>:port:user-sessid-xxx:pass` form) work through the same env var.
+> **Proxy notes:** `PROXY_SERVER` accepts `http://user:pass@host:port` or the `host:port:user:pass` dashboard form (normalized internally). Sticky sessions (`gate.<provider>:port:user-sessid-xxx:pass` form) work through the same env var. `-e PROXY_BYPASS_DOMAINS=a.com,b.com` routes listed domains DIRECT on Chrome (for sites whose Cloudflare dislikes your proxy exits more than your own IP).
 >
-> Full worked example — production config verified against Reddit and Product Hunt:
+> Full worked example — production config verified against Reddit and a parallel stat-page burst:
 > ```bash
 > docker build --platform linux/amd64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
 > docker rm -f slimatlas
