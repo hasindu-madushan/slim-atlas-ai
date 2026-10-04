@@ -32,6 +32,7 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'auth-token': 'MCP_AUTH_TOKEN',
   'lightpanda-version': 'LIGHTPANDA_VERSION',
   'log-to-stdout': 'LOG_TO_STDOUT',
+  'plugins': 'PLUGINS',
 };
 
 const BOOLEAN_FLAGS = new Set([

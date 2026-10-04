@@ -5,6 +5,7 @@
 - Single-package TypeScript ESM MCP server (`slimatlas`). No monorepo.
 - Runtime entry: `src/index.ts`. Bun runs TypeScript natively — no build step required.
 - Uses `bun` for runtime, test runner, and package management; `bun.lock` is the lockfile.
+- Non-core tools live in plugins under `src/plugins/` (see "Plugin system" below); all plugins are **disabled by default**.
 
 ## Commands
 
@@ -84,6 +85,7 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
   ```
 - Notable defaults:
   - `FALLBACK_BROWSER=none`
+  - `PLUGINS=` (empty — **all plugins disabled**; see "Plugin system" below)
   - `SKIP_LIGHTPANDA_DOMAINS=` (empty)
   - `MAX_SESSIONS=0` (unlimited)
   - `STEALTH_ENABLED=true`, `HUMAN_DELAYS_ENABLED=true`
@@ -126,7 +128,7 @@ The old Chrome/CDP detection (`checkBotDetectionChrome`) and the weak-marker log
 
 ## Browser tools (from `src/server.ts`)
 
-Live source of truth: the `tools/list` MCP response. Currently exposed:
+Live source of truth: the `tools/list` MCP response. Core tools (always exposed):
 
 - `browser_navigate` — Navigate to a URL; creates a new session if `session_id` is omitted.
 - `browser_snapshot` — YAML-like accessibility tree with node IDs for targeting.
@@ -138,8 +140,21 @@ Live source of truth: the `tools/list` MCP response. Currently exposed:
 - `browser_reload` — Reload current page.
 - `browser_get_page_info` — Current URL and title.
 - `browser_close` — Close the session and free resources.
-- `browser_print_pdf` — Print current page or a provided HTML document to a base64 PDF. Forces the real-Chrome fallback (lightpanda has no `Page.printToPDF`). **Pipeline-only** (report/document generation, called programmatically by clients such as GeniusLaunch) — not for agents doing research/browsing; the caller must `browser_close` the session afterwards.
-- `browser_export_pptx` — Convert current page or a provided HTML document to a base64 .pptx via dom-to-pptx (slides = `selector` matches, default `.slide`, authored at final pixel size e.g. 1920x1080). Forces the real-Chrome fallback (lightpanda's JS engine measures elements wrong and yields empty slides). The converter bundle is vendored at `src/vendor/dom-to-pptx.bundle.js`. **Pipeline-only** (deck generation) — not for agents doing research/browsing; the caller must `browser_close` the session afterwards.
+
+Plugin tools (only when the plugin is enabled via `PLUGINS`):
+
+- `browser_print_pdf` / `browser_export_pptx` — from the `document-export` plugin (`src/plugins/document-export/`). Both force the real-Chrome fallback via `ctx.forceFallback()` (lightpanda has no `Page.printToPDF` and measures elements wrong for pptx). **Pipeline-only** (report/deck generation, called programmatically by clients such as GeniusLaunch) — not for agents doing research/browsing; the caller must `browser_close` the session afterwards. The dom-to-pptx converter bundle is vendored at `src/plugins/document-export/vendor/dom-to-pptx.bundle.js`.
+
+## Plugin system (`src/plugin-api.ts`, `src/plugins/`)
+
+- A plugin is a `Plugin` object (`name` + `tools: ToolDefinition[]` + optional `init`/`shutdown` hooks), registered in `BUILTIN_PLUGINS` (`src/plugins/registry.ts`). Core tools use the same `ToolDefinition` shape — the server dispatches everything through one `Map<name, ToolDefinition>`; there is no separate plugin code path at call time.
+- Plugin lifecycle: `init({ log })` runs at startup in `PLUGINS` order, awaited, before any request is served (throwing exits the server); `shutdown()` runs on SIGINT/SIGTERM, best-effort, after session queues are killed and before sessions/pools are torn down. Full contract: `docs/plugins.md` § Lifecycle hooks.
+- **Disabled by default.** `PLUGINS` (env) / `--plugins` (flag): comma-separated names, `none` = none, unknown name exits at startup. Tool-name collisions across core/plugins abort startup.
+- Plugin handlers get a narrow `ToolContext`: the session's `ChromeManager`, `forceFallback()` (level-switch with history replay), layer introspection, `browserTag()`, and `textResult()` (core result format — clients parse the `session_id:` first line). They never touch the `SessionManager`, pools, rate limiting, or bot detection.
+- Plugin tool calls run through the same per-session `fastq` queue and get the same error isolation (`isError`), disconnect recovery, and idle cleanup as core tools. Page mutations inside plugin tools are **not** recorded in history (not replayed on reconnect/escalation).
+- Authoring guide: `docs/plugins.md`.
+
+
 
 ## Gotchas
 

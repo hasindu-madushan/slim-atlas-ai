@@ -30,7 +30,16 @@ const { PuppeteerMCPServer } = await import('./server.js');
 const { ensureLightpanda } = await import('./pool.js');
 
 await ensureLightpanda();
+
 const server = new PuppeteerMCPServer();
+try {
+  // Loads + inits plugins and builds the tool registry. Bad PLUGINS values
+  // (unknown plugin names) exit here with a clear message, like bad flags.
+  await server.init();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 let shuttingDown = false;
 async function shutdown() {

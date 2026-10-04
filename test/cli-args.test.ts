@@ -68,6 +68,11 @@ describe('parseCliArgs', () => {
     expect(() => parseCliArgs(['--unknown-flag=value'])).toThrow('Unknown flag');
   });
 
+  it('passes plugin lists through as free-form strings (validated against the registry at startup)', () => {
+    expect(parseCliArgs(['--plugins=document-export'])['plugins']).toBe('document-export');
+    expect(parseCliArgs(['--plugins=none'])['plugins']).toBe('none');
+  });
+
   it('rejects removed flags', () => {
     expect(() => parseCliArgs(['--chrome-enabled=false'])).toThrow('Unknown flag');
     expect(() => parseCliArgs(['--skip-headless-domains=g2.com'])).toThrow('Unknown flag');

@@ -112,6 +112,19 @@ Disabled by default. Enable with a non-empty domain list **and** a non-zero dela
 | `RATE_LIMIT_MIN_DELAY_MS` | `--rate-limit-min-delay-ms` | number | `0` | Minimum delay (ms) between navigates to rate-limited domains. |
 | `RATE_LIMIT_JITTER_MS` | `--rate-limit-jitter-ms` | number | `0` | Random jitter (0..value ms) added to each delay to avoid fixed-interval fingerprinting. |
 
+## Plugins
+
+Extra MCP tools beyond the core `browser_*` set. **All plugins are disabled by default** — see [plugins.md](plugins.md) for the full list of built-ins and how to write your own.
+
+| Env Var | CLI Flag | Type | Default | Description |
+|---------|----------|------|---------|-------------|
+| `PLUGINS` | `--plugins` | string | (empty = all disabled) | Comma-separated plugin names to load at startup. `none` = no plugins. Unknown names exit at startup. Built-ins: `document-export` (exposes `browser_print_pdf` + `browser_export_pptx`, forces the real-Chrome fallback). |
+
+```bash
+# Enable the document-export pipeline tools
+bun run src/index.ts --plugins=document-export --fallback-browser=headless
+```
+
 ## Cleanup
 
 | Env Var | CLI Flag | Type | Default | Description |
