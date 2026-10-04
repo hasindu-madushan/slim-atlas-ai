@@ -11,9 +11,9 @@ const ENV_JITTER_MS = parseInt(process.env.RATE_LIMIT_JITTER_MS || '0', 10);
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
 
 export class RateLimiter {
-  // ponytail: global per-domain last-hit ts. Cross-session read-then-write race
-  // is benign (worst case one extra request slips in the window); upgrade to a
-  // per-domain promise chain if strict ordering is ever required.
+  // Global per-domain next-allowed ts. throttle() advances it synchronously BEFORE
+  // sleeping, so concurrent callers queue in distinct slots instead of all reading
+  // the same snapshot and waking as one burst.
   private lastHit: Map<string, number> = new Map();
   private readonly patterns: string[];
   private readonly minDelayMs: number;
@@ -58,14 +58,20 @@ export class RateLimiter {
     const domain = this.matchedDomain(url);
     if (!domain) return;
 
-    // ponytail: effective min delay = minDelayMs + random(0, jitterMs). jitter
-    // is drawn fresh per hit so pacing isn't a fixed, fingerprintable interval.
+    // ponytail: reserve the slot synchronously BEFORE sleeping. Writing lastHit only
+    // after the sleep let a burst of concurrent callers read the same snapshot, sleep
+    // identical waits in parallel, wake together, and all hit the domain at once.
+    // Single-threaded JS makes the read-modify-write atomic — no lock needed.
+    // effective min delay = minDelayMs + random(0, jitterMs); jitter is drawn fresh
+    // per hit so pacing isn't a fixed, fingerprintable interval.
     const effective = this.minDelayMs + Math.random() * this.jitterMs;
-    const wait = effective - (Date.now() - (this.lastHit.get(domain) ?? 0));
+    const now = Date.now();
+    const slot = Math.max(now, (this.lastHit.get(domain) ?? 0) + effective);
+    this.lastHit.set(domain, slot);
+    const wait = slot - now;
     if (wait > 0) {
       log.info(sessionId, `Rate limit: sleeping ${Math.round(wait)}ms before hitting ${domain}`);
       await sleep(wait);
     }
-    this.lastHit.set(domain, Date.now());
   }
 }

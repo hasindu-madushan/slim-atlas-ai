@@ -137,17 +137,42 @@ Multi-arch is handled automatically — the build detects the container's arch v
 > **Apple Silicon (M-series Macs):** pass `--platform linux/arm64` to build/run natively. Without it, Docker Desktop may default to `amd64` and run the container under Rosetta, which fails to launch the Lightpanda binary (`rosetta error: failed to open elf …`).
 > ```bash
 > docker build --platform linux/arm64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
-> docker run --platform linux/arm64 --name slimatlas -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret -e LIGHTPANDA_POOL_SIZE=10 -e CHROME_POOL_SIZE=10 slimatlas
+> docker run --platform linux/arm64 --name slimatlas -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret -e PLUGINS=document-export -e LIGHTPANDA_POOL_SIZE=20 -e CHROME_POOL_SIZE=10 -e SKIP_LIGHTPANDA_DOMAINS=reddit.com -e RATE_LIMIT_DOMAINS=reddit.com -e RATE_LIMIT_MIN_DELAY_MS=10000 slimatlas
 > ``` 
+>
+> **Note on bot-checked sites (Reddit, Cloudflare-fronted sites):** on `linux/arm64` the image falls back to Debian Chromium, which current bot walls (e.g. Reddit's "Prove your humanity", Cloudflare "Just a moment...") serve an interactive challenge to regardless of stealth settings. Verified against Reddit: the same container on `linux/amd64` — which pins **Chrome-for-Testing** (default `131.0.6778.204`; current-generation stable builds get walled) — renders threads fine. Prefer the amd64 image for bot-checked targets (on M-series Macs it runs under Rosetta; Lightpanda works there since the x86_64 binary is bundled at build time).
+>
+> **Engine choice / proxy:** BOTH browser layers route through `PROXY_SERVER` (same credentials; Lightpanda via inline-auth `--http-proxy`, Chrome via `--proxy-server` + `page.authenticate`). Reddit renders through proxied Lightpanda directly; when a session hits a challenge, the bot-detection layer escalates it to the Chrome 131 fallback. Add `-e SKIP_LIGHTPANDA_DOMAINS=reddit.com` to force threads straight onto Chrome instead.
+>
+> **Proxy notes:** `PROXY_SERVER` accepts `http://user:pass@host:port` or the `host:port:user:pass` dashboard form (normalized internally). Sticky sessions (`gate.<provider>:port:user-sessid-xxx:pass` form) work through the same env var. `-e PROXY_BYPASS_DOMAINS=a.com,b.com` routes listed domains DIRECT on Chrome (for sites whose Cloudflare dislikes your proxy exits more than your own IP).
+>
+> Full worked example — production config verified against Reddit and a parallel stat-page burst:
+> ```bash
+> docker build --platform linux/amd64 --build-arg FALLBACK_BROWSER=headful -t slimatlas .
+> docker rm -f slimatlas
+> docker run -d --name slimatlas -p 8080:8080 \
+>   -e MCP_AUTH_TOKEN=s3cret \
+>   -e PLUGINS=document-export \
+>   -e CHROME_POOL_SIZE=6 \
+>   -e RATE_LIMIT_DOMAINS=reddit.com \
+>   -e RATE_LIMIT_MIN_DELAY_MS=10000 \
+>   -e TZ=America/New_York \
+>   -e PROXY_SERVER="http://user:pass@proxy-host:port" \
+>   -e PROXY_BYPASS_DOMAINS=cloudflare-heavy-site.com \
+>   slimatlas
+> ```
+> Omit `PROXY_SERVER`, `PROXY_BYPASS_DOMAINS`, and `TZ` if you don't use a proxy. `CHROME_POOL_SIZE` matters: the default of 1 serializes every challenge-escalated session and causes client timeouts once a session leaks. The pinned Chrome version is overridable at build time with `--build-arg CHROME_CFT_VERSION=<version>` if a site's wall ever starts flagging it.
 
 **Headful fallback variant.** The default image runs Lightpanda only (`FALLBACK_BROWSER=none`). To enable the headful Chrome fallback (needed only if you set `FALLBACK_BROWSER=headful` at runtime), build the headful variant — it adds the Chrome runtime libraries + Xvfb (~150MB) and presets `FALLBACK_BROWSER=headful`:
 
 ```bash
 docker build --build-arg LIGHTPANDA_VERSION=0.3.3 FALLBACK_BROWSER=headful -t slimatlas:headful .
-docker run -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret slimatlas:headful
+docker run -p 8080:8080 -e MCP_AUTH_TOKEN=s3cret -e PLUGINS=document-export slimatlas:headful
 ```
 
 Xvfb is started lazily inside the container on the first session that escalates to headful Chrome — no entrypoint or manual `xvfb-run` needed.
+
+**Document export (PDF/PPTX) plugin.** `browser_print_pdf` and `browser_export_pptx` ship in the `document-export` plugin and are **disabled by default** — enable with `-e PLUGINS=document-export` (or the `--plugins=document-export` flag). Both tools force the real-Chrome fallback, so they need an image that actually has one: use the headful variant above. On the Lightpanda-only default image the tools list but every call fails (`No fallback browser configured`). Plugin authoring guide: [docs/plugins.md](docs/plugins.md).
 
 ### Stdio Mode
 
@@ -288,19 +313,28 @@ mcp.call("browser_close", {"session_id": "abc1"})
 
 ## Available Tools
 
+The core `browser_*` tools below are always available. Two additional pipeline tools — `browser_print_pdf` and `browser_export_pptx` — ship in the `document-export` plugin and are **disabled by default** (`-e PLUGINS=document-export` / `--plugins=document-export`); see [docs/plugins.md](docs/plugins.md).
+
 | Tool | Description | Value |
 |------|-------------|-------|
 | `browser_navigate` | Navigate to a URL with configurable wait strategy | Entry point for all web interactions. Supports `load`, `domcontentloaded`, `networkidle0`, `networkidle2` |
 | `browser_snapshot` | Get YAML accessibility tree with unique node IDs | Structured page representation ideal for LLM understanding. Node IDs enable precise targeting for clicks/types |
 | `browser_view_node` | View specific node content by ID (text or image) | Inspect individual elements without full page re-read. Returns images as base64 for visual verification |
 | `browser_click` | Click element by node ID or CSS selector | Node ID (from snapshot) is recommended over CSS selectors for reliability and simplicity |
-| `browser_type` | Type text into element with optional keystroke delay | Simulates human typing. Use for search boxes, forms, and text inputs |
-| `browser_fill` | Fill input element with a value instantly | Faster than `browser_type` for form fields. Clears existing value before filling |
+| `browser_type` | Type text into an element with optional keystroke delay | Simulates human typing. Use for search boxes, forms, and text inputs |
+| `browser_fill` | Fill an input element with a value instantly | Faster than `browser_type` for form fields. Clears existing value before typing |
 | `browser_go_back` | Navigate back in browser history | Essential for multi-step workflows and correcting navigation mistakes |
 | `browser_go_forward` | Navigate forward in browser history | Complements `browser_go_back` for bidirectional navigation |
-| `browser_reload` | Reload the current page | Refresh dynamic content or recover from stale page state |
+| `browser_reload` | Reload current page | Refresh dynamic content or recover from stale page state |
 | `browser_get_page_info` | Get current page URL and title | Quick way to verify navigation success and current context |
 | `browser_close` | Close browser session and free resources | Important for cleanup. Sessions auto-close on timeout, but explicit closing is recommended |
+
+Plugin tools (only with `PLUGINS=document-export`):
+
+| Tool | Description | Value |
+|------|-------------|-------|
+| `browser_print_pdf` | Print current page or a provided HTML document to a base64 PDF | For document/report generation pipelines only — NOT for agent research/browsing. Forces the real-Chrome fallback (`FALLBACK_BROWSER`); accepts a caller-supplied `session_id` (create → print → `browser_close`) |
+| `browser_export_pptx` | Convert current page or a provided HTML document to a base64 .pptx via dom-to-pptx | For deck generation pipelines only. Slides are the elements matching `selector` (default `.slide`) at final pixel size (e.g. 1920x1080); `with_previews=true` also returns per-slide PNGs. Forces the real-Chrome fallback; caller closes the session with `browser_close` |
 
 ## Running Tests
 

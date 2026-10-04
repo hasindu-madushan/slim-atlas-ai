@@ -1,13 +1,12 @@
 import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, BrowserContext, Page } from 'puppeteer';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
-import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
+import { createStealthPlugin, getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
 import { ensureDisplay, type DisplayHandle } from './xvfb.js';
 import type { FallbackPool } from './session.js';
 
-puppeteer.use(StealthPlugin());
+puppeteer.use(createStealthPlugin());
 
 const MAX_SIZE = parseInt(process.env.HEADFUL_CHROME_POOL_SIZE || process.env.CHROME_POOL_SIZE || '1', 10);
 
@@ -26,6 +25,9 @@ interface HeadfulChromeSlot {
 
 export class HeadfulChromePool implements FallbackPool {
   private browser: Browser | null = null;
+  // Memoized launch so concurrent first-escalations share ONE browser launch instead
+  // of racing into several browsers (and several Xvfb displays) in the same tick.
+  private launchPromise: Promise<Browser> | null = null;
   private available: HeadfulChromeSlot[] = [];
   private inUse: Map<string, HeadfulChromeSlot> = new Map();
   private waitQueue: Array<(slot: HeadfulChromeSlot) => void> = [];
@@ -33,7 +35,15 @@ export class HeadfulChromePool implements FallbackPool {
 
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser && this.browser.connected) return this.browser;
+    if (!this.launchPromise) {
+      this.launchPromise = this.launchBrowser();
+      // A failed launch must not poison the cache — let the next call retry.
+      this.launchPromise.catch(() => { this.launchPromise = null; });
+    }
+    return this.launchPromise;
+  }
 
+  private async launchBrowser(): Promise<Browser> {
     log.info('headful-chrome-pool', 'Launching headful Chrome browser');
     if (!this.displayHandle) {
       this.displayHandle = await ensureDisplay();
@@ -54,6 +64,7 @@ export class HeadfulChromePool implements FallbackPool {
     this.browser.on('disconnected', () => {
       log.warn('headful-chrome-pool', 'Headful Chrome browser disconnected');
       this.browser = null;
+      this.launchPromise = null;
       this.available = [];
       this.inUse.clear();
     });

@@ -1,12 +1,11 @@
 import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, BrowserContext, Page } from 'puppeteer';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
-import { getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
+import { createStealthPlugin, getAntiDetectionArgs, applyStealthToPage } from './stealth.js';
 import type { FallbackPool } from './session.js';
 
-puppeteer.use(StealthPlugin());
+puppeteer.use(createStealthPlugin());
 
 const MAX_SIZE = parseInt(process.env.CHROME_POOL_SIZE || '1', 10);
 

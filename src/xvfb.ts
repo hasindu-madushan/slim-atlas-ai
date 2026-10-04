@@ -26,11 +26,7 @@ async function tryStartXvfb(display: string): Promise<any> {
   return proc;
 }
 
-export async function ensureDisplay(): Promise<DisplayHandle> {
-  if (process.platform === 'darwin' || process.platform === 'win32') {
-    return { kill: () => {}, display: process.env.DISPLAY || ':0' };
-  }
-
+async function startDisplay(): Promise<DisplayHandle> {
   if (process.env.DISPLAY) {
     return { kill: () => {}, display: process.env.DISPLAY };
   }
@@ -54,6 +50,7 @@ export async function ensureDisplay(): Promise<DisplayHandle> {
           // We set DISPLAY for this Xvfb; clear it so a later relaunch
           // doesn't skip Xvfb startup against the now-dead display.
           if (process.env.DISPLAY === display) delete process.env.DISPLAY;
+          displayPromise = null;  // allow a fresh display after teardown
         },
         display,
       };
@@ -62,4 +59,21 @@ export async function ensureDisplay(): Promise<DisplayHandle> {
     }
   }
   throw new Error(`Failed to start Xvfb on any candidate display: ${lastErr?.message || 'unknown error'}`);
+}
+
+// Memoized so concurrent escalations share ONE Xvfb instead of racing to start
+// several displays in the same tick.
+let displayPromise: Promise<DisplayHandle> | null = null;
+
+export function ensureDisplay(): Promise<DisplayHandle> {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    return Promise.resolve({ kill: () => {}, display: process.env.DISPLAY || ':0' });
+  }
+  if (!displayPromise) {
+    displayPromise = startDisplay().catch(e => {
+      displayPromise = null;
+      throw e;
+    });
+  }
+  return displayPromise;
 }

@@ -5,6 +5,7 @@ import { createCloudService } from './cloud-browser-service.js';
 import { ChromeManager } from './chrome.js';
 import { log } from './logger.js';
 import { SessionHistory } from './history.js';
+import { isProxyBypassedUrl } from './stealth.js';
 
 const RESOURCE_LOGGING_ENABLED = process.env.RESOURCE_LOGGING_ENABLED !== 'false';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '0', 10); // 0 = unlimited
@@ -81,7 +82,7 @@ export class SessionManager {
     return this.sessions.has(sessionId);
   }
 
-  async acquire(sessionId: string): Promise<ChromeManager> {
+  async acquire(sessionId: string, firstUrl?: string): Promise<ChromeManager> {
     if (this.sessions.has(sessionId)) {
       return this.ensureConnected(sessionId);
     }
@@ -97,8 +98,11 @@ export class SessionManager {
       history: new SessionHistory(),
     };
 
-    log.info(sessionId, `New session on lightpanda`);
-    await this.attachLightpanda(sessionId, state);
+    // PROXY_BYPASS_DOMAINS URLs start on a DIRECT (unproxied) lightpanda instance;
+    // everything else on a proxied one.
+    const direct = firstUrl ? isProxyBypassedUrl(firstUrl) : false;
+    log.info(sessionId, `New session on lightpanda (${direct ? 'direct' : 'proxied'})`);
+    await this.attachLightpanda(sessionId, state, direct);
     this.sessions.set(sessionId, state);
     return state.manager!;
   }
@@ -148,8 +152,8 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.onLightpanda ?? true;
   }
 
-  private async attachLightpanda(sessionId: string, state: SessionState): Promise<void> {
-    const inst = await this.lpPool.acquire(sessionId);
+  private async attachLightpanda(sessionId: string, state: SessionState, direct = false): Promise<void> {
+    const inst = await this.lpPool.acquire(sessionId, direct);
     state.lpInstanceId = inst.id;
     state.manager = new ChromeManager({ browser: inst.browser, context: inst.context, page: inst.page });
   }

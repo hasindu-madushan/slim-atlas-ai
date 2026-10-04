@@ -15,6 +15,7 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'human-delays-enabled': 'HUMAN_DELAYS_ENABLED',
   'user-agent': 'USER_AGENT',
   'proxy-server': 'PROXY_SERVER',
+  'proxy-bypass-domains': 'PROXY_BYPASS_DOMAINS',
   'cleanup-interval-ms': 'CLEANUP_INTERVAL_MS',
   'session-idle-timeout-ms': 'SESSION_IDLE_TIMEOUT_MS',
   'resource-logging-enabled': 'RESOURCE_LOGGING_ENABLED',
@@ -31,6 +32,7 @@ export const CLI_FLAG_TO_ENV: Record<string, string> = {
   'auth-token': 'MCP_AUTH_TOKEN',
   'lightpanda-version': 'LIGHTPANDA_VERSION',
   'log-to-stdout': 'LOG_TO_STDOUT',
+  'plugins': 'PLUGINS',
 };
 
 const BOOLEAN_FLAGS = new Set([
